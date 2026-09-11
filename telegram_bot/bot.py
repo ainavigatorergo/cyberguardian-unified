@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, types
+from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from flask import Flask, request
@@ -18,7 +19,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # === Инициализация ===
-bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
 dp = Dispatcher()
 app = Flask(__name__)
 
@@ -26,16 +30,17 @@ app = Flask(__name__)
 # === КОМАНДЫ ===
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.answer(
+    text = (
         "👋 Привет! Я бот для двух каналов:\n"
         "🔐 @CyberGuardianSec — кибербезопасность\n"
         "🤖 @ainavigatorErgo — нейросети и автоматизация\n\n"
         "Команды:\n"
         "/status — статус сервисов\n"
-        "/generate <тема> <канал> — создать пост\n"
-        "/post <текст> <канал> — опубликовать\n"
-        "/ideas <канал> — предложить темы"
+        "/generate [тема] [канал] — создать пост\n"
+        "/post [текст] [канал] — опубликовать\n"
+        "/ideas [канал] — предложить темы"
     )
+    await message.answer(text)
 
 
 @dp.message(Command("status"))
@@ -52,7 +57,7 @@ async def cmd_status(message: types.Message):
 async def cmd_generate(message: types.Message):
     args = message.text.split(maxsplit=2)
     if len(args) < 3:
-        await message.answer("Использование: /generate <тема> <канал>\nКаналы: cyber, ai")
+        await message.answer("Использование: /generate [тема] [канал]\nКаналы: cyber, ai")
         return
 
     topic = args[1]
@@ -80,7 +85,7 @@ async def cmd_generate(message: types.Message):
 async def cmd_post(message: types.Message):
     args = message.text.split(maxsplit=2)
     if len(args) < 3:
-        await message.answer("Использование: /post <текст> <канал>")
+        await message.answer("Использование: /post [текст] [канал]")
         return
 
     text = args[1]
