@@ -71,7 +71,7 @@ async def cmd_generate(message: types.Message):
 
     try:
         post_text = await generate_post(topic, channel_key)
-        image_url = await generate_image(topic)
+        image_url = await generate_image(topic, channel_key)
 
         await message.answer(f"✅ Пост готов:\n\n{post_text}")
         if image_url:
