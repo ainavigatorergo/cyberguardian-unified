@@ -2,6 +2,7 @@ import aiohttp
 import urllib.parse
 import json
 import os
+from PIL import Image
 from config import PROVOD_API_KEY, OPENROUTER_API_KEY, CHANNELS, DATA_DIR
 
 PROVOD_URL = "https://api.provod.ai/v1/chat/completions"
@@ -15,7 +16,6 @@ OPENROUTER_MODELS = [
     "google/gemma-3-12b-it:free",
 ]
 
-# === Промпты для картинок ===
 IMAGE_STYLES = {
     "cyber": (
         "Cybersecurity concept illustration, {topic}, "
@@ -31,9 +31,11 @@ IMAGE_STYLES = {
     ),
 }
 
+IMAGES_DIR = os.path.join(DATA_DIR, "images")
+os.makedirs(IMAGES_DIR, exist_ok=True)
+
 
 def _load_used_topics(channel_key):
-    """Загружает список использованных тем."""
     path = os.path.join(DATA_DIR, "used_topics.json")
     if not os.path.exists(path):
         return []
@@ -46,7 +48,6 @@ def _load_used_topics(channel_key):
 
 
 async def _call_api(url: str, api_key: str, model: str, prompt: str):
-    """Универсальный вызов API."""
     async with aiohttp.ClientSession() as session:
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -65,7 +66,6 @@ async def _call_api(url: str, api_key: str, model: str, prompt: str):
 
 
 async def _smart_call(prompt: str):
-    """Пробует provod.ai, потом OpenRouter."""
     try:
         return await _call_api(PROVOD_URL, PROVOD_API_KEY, "gemini-3.5-flash", prompt)
     except Exception as e:
@@ -83,92 +83,85 @@ async def _smart_call(prompt: str):
 
 
 async def generate_ideas(channel_key: str, count: int = 5) -> list:
-    """
-    Генерирует свежие идеи для постов через AI.
-    Учитывает использованные темы, чтобы не повторяться.
-    """
     profile = CHANNELS[channel_key]
     used = _load_used_topics(channel_key)
     used_str = ", ".join(used[-20:]) if used else "пока ничего"
 
     if channel_key == "cyber":
         context = (
-            "Ниша: кибербезопасность. Актуальные тренды 2026: новые схемы фишинга, "
-            "утечки данных, ИИ-мошенничество, защита аккаунтов, VPN, пароли, "
-            "социальная инженерия, взломы через мессенджеры."
+            "Ниша: кибербезопасность. Тренды 2026: новые схемы фишинга, "
+            "утечки данных, ИИ-мошенничество, защита аккаунтов, VPN, пароли."
         )
     else:
         context = (
-            "Ниша: нейросети и автоматизация для бизнеса. Актуальные тренды 2026: "
-            "ChatGPT, Midjourney, AI-агенты, автоматизация рутины, промпты, "
-            "нейросети для маркетинга, контента, продаж."
+            "Ниша: нейросети для бизнеса. Тренды 2026: ChatGPT, Midjourney, "
+            "AI-агенты, автоматизация, промпты, нейросети для маркетинга."
         )
 
     prompt = f"""
 Ты — контент-стратег для Telegram-канала «{profile['name']}».
-
 {context}
-
 Уже использованные темы (НЕ повторяйся): {used_str}
 
-Придумай {count} свежих, цепляющих тем для постов.
-Требования:
-- Каждая тема — 4–8 слов.
-- Актуально, полезно, вовлекает.
-- Без кликбейта и паники.
-- Разные подтемы (не одно и то же).
-
-Формат ответа: только список тем, каждая с новой строки, без нумерации, без пояснений.
+Придумай {count} свежих тем для постов (4–8 слов каждая).
+Формат: только список, каждая с новой строки, без нумерации.
 """
-
     response = await _smart_call(prompt)
-    # Разбиваем на строки и очищаем
     ideas = [line.strip(" -•*0123456789.") for line in response.split("\n") if line.strip()]
     ideas = [i for i in ideas if 4 < len(i) < 80][:count]
     return ideas
 
 
 async def generate_post(topic: str, channel_key: str) -> str:
-    """Генерирует пост для Telegram-канала."""
     profile = CHANNELS[channel_key]
 
     if channel_key == "cyber":
         extra = (
-            "Акцент на защиту, угрозы, практические советы. "
-            "Примеры: фишинг, утечки, взломы, VPN, пароли. "
-            "Тон: спокойный, экспертный, без паники."
+            "Акцент на защиту и практические советы. Тон: спокойный, экспертный, без паники."
         )
     else:
         extra = (
-            "Акцент на инструменты, кейсы, автоматизацию. "
-            "Примеры: ChatGPT, Midjourney, промпты, нейросети для бизнеса. "
-            "Тон: дружелюбный, практичный, с примерами."
+            "Акцент на инструменты и кейсы. Тон: дружелюбный, практичный, с примерами."
         )
 
     prompt = f"""
 {profile['prompt_prefix']}
-
 Стиль: {profile['style']}
-
 Особенности канала: {extra}
 
 Напиши пост для Telegram-канала на тему: {topic}
 
-Требования:
-- Длина: 800–1200 символов.
+Требования (ВАЖНО):
+- Длина поста: СТРОГО 700–900 символов (не больше!).
 - Начни с цепляющего заголовка с эмодзи.
-- 2–3 абзаца по делу.
-- Дай 3 практических совета или шага.
-- Заверши вопросом к читателям.
-- Добавь 3–5 хештегов.
-- Без воды, без кликбейта, без паники.
-"""
+- 2 абзаца по делу.
+- 3 практических совета (коротко).
+- Заверши коротким вопросом к читателям.
+- Добавь 4 хештега.
+- Без воды, без кликбейта.
 
+Пост должен быть компактным, но полезным.
+"""
     return await _smart_call(prompt)
 
 
+def _crop_watermark(image_path: str):
+    """Обрезает нижнюю полосу картинки, где расположен логотип Pollinations."""
+    try:
+        img = Image.open(image_path)
+        w, h = img.size
+        # Обрезаем нижние 8% и правые 15% (там логотип)
+        cropped = img.crop((0, 0, int(w * 0.85), int(h * 0.93)))
+        cropped.save(image_path, "PNG")
+        print(f"   ✂️ Логотип обрезан")
+        return True
+    except Exception as e:
+        print(f"   ⚠️ Не удалось обрезать логотип: {e}")
+        return False
+
+
 async def generate_image(topic: str, channel_key: str = "cyber") -> str:
-    """Генерирует тематическую картинку через Pollinations.ai."""
+    """Генерирует картинку, скачивает, обрезает логотип. Возвращает путь к файлу."""
     style_template = IMAGE_STYLES.get(channel_key, IMAGE_STYLES["cyber"])
     image_prompt = style_template.format(topic=topic)
 
@@ -177,4 +170,21 @@ async def generate_image(topic: str, channel_key: str = "cyber") -> str:
         f"https://image.pollinations.ai/prompt/{clean_prompt}"
         f"?width=1024&height=1024&nologo=true&model=flux"
     )
-    return url
+
+    filename = f"{channel_key}_{abs(hash(topic)) % 100000}.png"
+    filepath = os.path.join(IMAGES_DIR, filename)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=120) as resp:
+                if resp.status != 200:
+                    print(f"⚠️ Pollinations вернул {resp.status}")
+                    return url
+                content = await resp.read()
+                with open(filepath, "wb") as f:
+                    f.write(content)
+        _crop_watermark(filepath)
+        return filepath
+    except Exception as e:
+        print(f"⚠️ Ошибка скачивания картинки: {e}")
+        return url
