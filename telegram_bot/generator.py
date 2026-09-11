@@ -146,7 +146,7 @@ async def generate_post(topic: str, channel_key: str) -> str:
 def _add_branding(image_path: str, channel_key: str = "cyber"):
     """
     Добавляет брендированную плашку с названием канала в правом нижнем углу,
-    перекрывая логотип Pollinations.ai.
+    полностью перекрывая логотип Pollinations.ai.
     """
     try:
         img = Image.open(image_path).convert("RGB")
@@ -165,10 +165,10 @@ def _add_branding(image_path: str, channel_key: str = "cyber"):
             border_color = (0, 255, 130)
             text_color = (255, 255, 255)
 
-        # Размеры плашки
-        pad_x = int(w * 0.02)
+        # Размеры плашки (расширены, чтобы точно перекрыть логотип)
+        pad_x = int(w * 0.01)          # уменьшен отступ справа
         pad_y = int(h * 0.012)
-        logo_w = int(w * 0.32)
+        logo_w = int(w * 0.38)         # шире, чтобы захватить логотип
         logo_h = int(h * 0.065)
         x1 = w - logo_w - pad_x
         y1 = h - logo_h - pad_y
