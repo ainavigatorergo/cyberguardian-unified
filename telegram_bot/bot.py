@@ -14,14 +14,12 @@ from flask import Flask, request
 import threading
 
 from config import BOT_TOKEN, CHANNELS
-from generator import generate_post, generate_image
+from generator import generate_post, generate_image, generate_ideas
 from scheduler import start_scheduler
 
-# === Логирование ===
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === Инициализация ===
 bot = Bot(
     token=BOT_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
@@ -30,7 +28,6 @@ dp = Dispatcher()
 app = Flask(__name__)
 
 
-# === FSM состояния ===
 class PostFlow(StatesGroup):
     entering_topic = State()
     approving = State()
@@ -38,7 +35,6 @@ class PostFlow(StatesGroup):
 
 # === Клавиатуры ===
 def main_menu():
-    """Главное inline-меню."""
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 Создать пост", callback_data="menu_create")],
         [
@@ -50,20 +46,32 @@ def main_menu():
     return kb
 
 
-def channels_inline():
-    """Кнопки выбора канала."""
+def channels_inline(action="ch"):
+    """Кнопки выбора канала. action: ch (для создания/идей) или idea (для просмотра идей)."""
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🔐 CyberGuardianSec", callback_data="ch_cyber"),
-            InlineKeyboardButton(text="🤖 AI Navigator", callback_data="ch_ai"),
+            InlineKeyboardButton(text="🔐 CyberGuardianSec", callback_data=f"{action}_cyber"),
+            InlineKeyboardButton(text="🤖 AI Navigator", callback_data=f"{action}_ai"),
         ],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_back")]
     ])
     return kb
 
 
+def ideas_inline(channel_key, ideas):
+    """Кнопки с темами-идеями. При нажатии — создать пост."""
+    buttons = []
+    for i, idea in enumerate(ideas):
+        buttons.append([InlineKeyboardButton(
+            text=f"💡 {idea[:50]}",
+            callback_data=f"useidea_{channel_key}_{i}"
+        )])
+    buttons.append([InlineKeyboardButton(text="🔄 Ещё идеи", callback_data=f"moreideas_{channel_key}")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_back")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def approve_inline():
-    """Кнопки утверждения поста."""
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="✅ Опубликовать", callback_data="approve_publish"),
@@ -87,43 +95,144 @@ async def cmd_start(message: types.Message, state: FSMContext):
     )
 
 
-# === МЕНЮ: СТАТУС ===
+# === СТАТУС ===
 @dp.callback_query(F.data == "menu_status")
 async def menu_status(callback: types.CallbackQuery):
     status = "✅ <b>Бот работает</b>\n\n"
-    status += f"📅 Время: <code>{datetime.now().strftime('%H:%M:%S')}</code>\n"
-    status += f"📢 Каналов: <b>{len(CHANNELS)}</b>\n\n"
+    status += f"📅 Время: <code>{datetime.now().strftime('%H:%M:%S')}</code>\n\n"
     for key, ch in CHANNELS.items():
         emoji = "🔐" if key == "cyber" else "🤖"
-        status += f"{emoji} <b>{ch['name']}</b>\n"
-        status += f"   📍 {ch['telegram_channel']}\n"
-        status += f"   📅 Постов в день: {len(ch['schedule'])}\n\n"
+        status += f"{emoji} <b>{ch['name']}</b>\n   📍 {ch['telegram_channel']}\n\n"
     await callback.message.edit_text(status, reply_markup=main_menu())
     await callback.answer()
 
 
-# === МЕНЮ: ИДЕИ ===
-@dp.callback_query(F.data == "menu_ideas")
-async def menu_ideas(callback: types.CallbackQuery):
-    await callback.message.edit_text(
-        "Выбери канал, для которого нужны идеи:",
-        reply_markup=channels_inline()
-    )
-    await callback.answer()
-
-
-# === МЕНЮ: НАЗАД ===
+# === НАЗАД ===
 @dp.callback_query(F.data == "menu_back")
 async def menu_back(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
+    await callback.message.edit_text("👋 Главное меню:", reply_markup=main_menu())
+    await callback.answer()
+
+
+# === ИДЕИ: выбор канала ===
+@dp.callback_query(F.data == "menu_ideas")
+async def menu_ideas(callback: types.CallbackQuery):
     await callback.message.edit_text(
-        "👋 Главное меню:",
-        reply_markup=main_menu()
+        "Выбери канал — я сгенерирую свежие идеи:",
+        reply_markup=channels_inline("idea")
     )
     await callback.answer()
 
 
-# === ВЫБОР КАНАЛА (для идей или создания поста) ===
+# === ИДЕИ: генерация через AI ===
+@dp.callback_query(F.data.startswith("idea_"))
+async def show_ideas(callback: types.CallbackQuery, state: FSMContext):
+    channel_key = callback.data.replace("idea_", "")
+    if channel_key not in CHANNELS:
+        await callback.answer("Неизвестный канал")
+        return
+
+    emoji = "🔐" if channel_key == "cyber" else "🤖"
+    await callback.message.edit_text(f"{emoji} Генерирую свежие идеи через AI... ⏳")
+    await callback.answer()
+
+    try:
+        ideas = await generate_ideas(channel_key, count=5)
+        await state.update_data(ideas=ideas, idea_channel=channel_key)
+        text = f"{emoji} <b>Свежие идеи для «{CHANNELS[channel_key]['name']}»:</b>\n\n"
+        text += "Нажми на идею, чтобы сразу создать пост 👇"
+        await callback.message.edit_text(text, reply_markup=ideas_inline(channel_key, ideas))
+    except Exception as e:
+        logger.error(f"Ошибка генерации идей: {e}")
+        await callback.message.edit_text(
+            f"❌ Ошибка: {e}",
+            reply_markup=main_menu()
+        )
+
+
+# === ИДЕИ: ещё ===
+@dp.callback_query(F.data.startswith("moreideas_"))
+async def more_ideas(callback: types.CallbackQuery, state: FSMContext):
+    channel_key = callback.data.replace("moreideas_", "")
+    emoji = "🔐" if channel_key == "cyber" else "🤖"
+    await callback.message.edit_text(f"{emoji} Генерирую ещё идеи... ⏳")
+    await callback.answer()
+
+    try:
+        ideas = await generate_ideas(channel_key, count=5)
+        await state.update_data(ideas=ideas, idea_channel=channel_key)
+        text = f"{emoji} <b>Ещё идеи для «{CHANNELS[channel_key]['name']}»:</b>\n\n"
+        text += "Нажми на идею, чтобы сразу создать пост 👇"
+        await callback.message.edit_text(text, reply_markup=ideas_inline(channel_key, ideas))
+    except Exception as e:
+        await callback.message.edit_text(f"❌ Ошибка: {e}", reply_markup=main_menu())
+
+
+# === ИДЕИ: использовать идею → создать пост ===
+@dp.callback_query(F.data.startswith("useidea_"))
+async def use_idea(callback: types.CallbackQuery, state: FSMContext):
+    parts = callback.data.split("_")
+    channel_key = parts[1]
+    idx = int(parts[2])
+
+    data = await state.get_data()
+    ideas = data.get("ideas", [])
+
+    if idx >= len(ideas):
+        await callback.answer("Идея не найдена")
+        return
+
+    topic = ideas[idx]
+    emoji = "🔐" if channel_key == "cyber" else "🤖"
+    profile = CHANNELS[channel_key]
+
+    await callback.message.edit_text(
+        f"{emoji} Канал: <b>{profile['name']}</b>\n\n"
+        f"📝 Тема: <i>{topic}</i>\n\n"
+        f"⏳ Генерирую пост..."
+    )
+    await callback.answer()
+
+    try:
+        post_text = await generate_post(topic, channel_key)
+        image_url = await generate_image(topic, channel_key)
+
+        await state.update_data(
+            topic=topic, post_text=post_text,
+            image_url=image_url, channel_key=channel_key
+        )
+        await state.set_state(PostFlow.approving)
+
+        if len(post_text) <= 1024:
+            await callback.message.answer_photo(
+                image_url,
+                caption=f"📄 <b>Превью:</b>\n\n{post_text}",
+                reply_markup=approve_inline()
+            )
+        else:
+            await callback.message.answer_photo(image_url, caption="🖼️ Картинка")
+            await callback.message.answer(
+                f"📄 <b>Превью:</b>\n\n{post_text}",
+                reply_markup=approve_inline()
+            )
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка: {e}", reply_markup=main_menu())
+        await state.clear()
+
+
+# === СОЗДАТЬ ПОСТ: выбор канала ===
+@dp.callback_query(F.data == "menu_create")
+async def menu_create(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(PostFlow.entering_topic)
+    await callback.message.edit_text(
+        "Выбери канал для нового поста:",
+        reply_markup=channels_inline("ch")
+    )
+    await callback.answer()
+
+
+# === ВЫБОР КАНАЛА ===
 @dp.callback_query(F.data.startswith("ch_"))
 async def choose_channel(callback: types.CallbackQuery, state: FSMContext):
     channel_key = callback.data.replace("ch_", "")
@@ -134,33 +243,12 @@ async def choose_channel(callback: types.CallbackQuery, state: FSMContext):
     profile = CHANNELS[channel_key]
     emoji = "🔐" if channel_key == "cyber" else "🤖"
 
-    current_state = await state.get_state()
-
-    if current_state == PostFlow.entering_topic.state:
-        # Создание поста — переходим к вводу темы
-        await state.update_data(channel_key=channel_key)
-        await callback.message.edit_text(
-            f"{emoji} Канал: <b>{profile['name']}</b>\n\n"
-            f"✏️ Напиши тему поста.\n\n"
-            f"<i>Примеры: {', '.join(profile['topics'][:3])}</i>"
-        )
-    else:
-        # Просмотр идей
-        ideas = "\n".join([f"• {t}" for t in profile["topics"][:10]])
-        await callback.message.edit_text(
-            f"{emoji} <b>Идеи для «{profile['name']}»:</b>\n\n{ideas}",
-            reply_markup=main_menu()
-        )
-    await callback.answer()
-
-
-# === МЕНЮ: СОЗДАТЬ ПОСТ ===
-@dp.callback_query(F.data == "menu_create")
-async def menu_create(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(channel_key=channel_key)
     await state.set_state(PostFlow.entering_topic)
     await callback.message.edit_text(
-        "Выбери канал для нового поста:",
-        reply_markup=channels_inline()
+        f"{emoji} Канал: <b>{profile['name']}</b>\n\n"
+        f"✏️ Напиши тему поста.\n\n"
+        f"<i>Примеры: {', '.join(profile['topics'][:3])}</i>"
     )
     await callback.answer()
 
@@ -186,22 +274,22 @@ async def handle_topic(message: types.Message, state: FSMContext):
         if len(post_text) <= 1024:
             await message.answer_photo(
                 image_url,
-                caption=f"📄 <b>Превью поста:</b>\n\n{post_text}",
+                caption=f"📄 <b>Превью:</b>\n\n{post_text}",
                 reply_markup=approve_inline()
             )
         else:
-            await message.answer_photo(image_url, caption="🖼️ Картинка к посту")
+            await message.answer_photo(image_url, caption="🖼️ Картинка")
             await message.answer(
-                f"📄 <b>Превью поста:</b>\n\n{post_text}",
+                f"📄 <b>Превью:</b>\n\n{post_text}",
                 reply_markup=approve_inline()
             )
     except Exception as e:
-        logger.error(f"Ошибка генерации: {e}")
+        logger.error(f"Ошибка: {e}")
         await message.answer(f"❌ Ошибка: {e}", reply_markup=main_menu())
         await state.clear()
 
 
-# === УТВЕРЖДЕНИЕ: ОПУБЛИКОВАТЬ ===
+# === УТВЕРЖДЕНИЕ ===
 @dp.callback_query(F.data == "approve_publish", PostFlow.approving)
 async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -231,7 +319,6 @@ async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# === УТВЕРЖДЕНИЕ: ПЕРЕГЕНЕРИРОВАТЬ ===
 @dp.callback_query(F.data == "approve_regen", PostFlow.approving)
 async def approve_regen(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -243,7 +330,6 @@ async def approve_regen(callback: types.CallbackQuery, state: FSMContext):
     try:
         post_text = await generate_post(topic, channel_key)
         image_url = await generate_image(topic, channel_key)
-
         await state.update_data(post_text=post_text, image_url=image_url)
 
         await callback.message.delete()
@@ -266,7 +352,7 @@ async def approve_regen(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# === МЕНЮ: ОПУБЛИКОВАТЬ ВРУЧНУЮ ===
+# === РУЧНАЯ ПУБЛИКАЦИЯ ===
 @dp.callback_query(F.data == "menu_manual")
 async def menu_manual(callback: types.CallbackQuery):
     await callback.message.edit_text(
@@ -281,7 +367,6 @@ async def menu_manual(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# === РУЧНАЯ ПУБЛИКАЦИЯ ===
 @dp.message(F.text.contains("|"))
 async def handle_manual_post(message: types.Message):
     parts = [p.strip() for p in message.text.split("|", 1)]
@@ -306,17 +391,7 @@ async def handle_manual_post(message: types.Message):
         await message.answer(f"❌ Ошибка: {e}")
 
 
-# === Команды для совместимости ===
-@dp.message(Command("status"))
-async def cmd_status(message: types.Message):
-    status = "✅ <b>Бот работает</b>\n\n"
-    for key, ch in CHANNELS.items():
-        emoji = "🔐" if key == "cyber" else "🤖"
-        status += f"{emoji} <b>{ch['name']}</b> — {ch['telegram_channel']}\n"
-    await message.answer(status, reply_markup=main_menu())
-
-
-# === Flask для Render ===
+# === Flask ===
 @app.route("/")
 def health():
     return "OK", 200
@@ -329,7 +404,6 @@ def webhook():
     return "OK", 200
 
 
-# === Запуск ===
 def run_flask():
     port = int(os.getenv("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
