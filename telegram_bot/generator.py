@@ -2,6 +2,7 @@ import aiohttp
 import urllib.parse
 import json
 import os
+import random
 from PIL import Image, ImageDraw, ImageFont
 from config import PROVOD_API_KEY, OPENROUTER_API_KEY, CHANNELS, DATA_DIR
 
@@ -18,19 +19,68 @@ OPENROUTER_MODELS = [
     "google/gemma-3-12b-it:free",
 ]
 
+# === Рандомизированные стили картинок ===
 IMAGE_STYLES = {
-    "cyber": (
-        "Cybersecurity concept illustration, {topic}, "
-        "dark navy blue and neon green colors, digital shield, padlock, "
-        "circuit board elements, futuristic tech style, "
-        "no text, no people, no faces, cinematic lighting, high quality"
-    ),
-    "ai": (
-        "Artificial intelligence concept illustration, {topic}, "
-        "dark purple and neon green colors, glowing neural network, "
-        "robot brain, digital particles, futuristic tech style, "
-        "no text, no people, no faces, cinematic lighting, high quality"
-    ),
+    "cyber": {
+        "base": (
+            "Cybersecurity concept illustration about {topic}, "
+            "dark navy blue background with neon green accents, "
+            "futuristic tech style, no text, no people, no faces, "
+            "cinematic lighting, high quality"
+        ),
+        "subjects": [
+            "digital shield with glowing circuit patterns",
+            "padlock made of binary code and light particles",
+            "matrix of falling green code forming a wall",
+            "cyber eye scanning a network of connected nodes",
+            "glowing key unlocking a firewall barrier",
+            "hand made of circuit lines protecting a server",
+            "data stream blocked by a holographic barrier",
+            "encrypted tunnel with neon green walls",
+            "surveillance camera in a digital grid",
+            "broken chain link representing hacked password",
+        ],
+        "compositions": [
+            "close-up view", "wide cinematic shot", "centered composition",
+            "dramatic angle", "minimalist composition", "detailed macro shot",
+            "isometric view", "top-down perspective", "symmetrical composition",
+        ],
+        "moods": [
+            "tense and mysterious", "calm and protective",
+            "futuristic and cold", "warm and reassuring",
+            "dark and cinematic", "energetic and dynamic",
+        ],
+    },
+    "ai": {
+        "base": (
+            "Artificial intelligence concept illustration about {topic}, "
+            "dark purple and blue background with neon green accents, "
+            "futuristic tech style, no text, no people, no faces, "
+            "cinematic lighting, high quality"
+        ),
+        "subjects": [
+            "glowing neural network with pulsing nodes",
+            "robot head with illuminated circuits",
+            "digital brain made of light particles",
+            "abstract AI core with orbiting data streams",
+            "holographic cube with interconnected nodes",
+            "futuristic server room with glowing blue lights",
+            "handshake between human hand and robotic hand made of light",
+            "fractal pattern of AI algorithms unfolding",
+            "spiral of glowing data representing machine learning",
+            "floating geometric shapes forming an AI symbol",
+        ],
+        "compositions": [
+            "close-up view", "wide cinematic shot", "centered composition",
+            "dramatic angle", "minimalist composition", "detailed macro shot",
+            "isometric view", "top-down perspective", "symmetrical composition",
+        ],
+        "moods": [
+            "futuristic and inspiring", "calm and thoughtful",
+            "energetic and bright", "mysterious and deep",
+            "clean and professional", "curious and exploratory",
+        ],
+    },
 }
 
 IMAGES_DIR = os.path.join(DATA_DIR, "images")
@@ -144,41 +194,34 @@ async def generate_post(topic: str, channel_key: str) -> str:
 
 
 def _add_branding(image_path: str, channel_key: str = "cyber"):
-    """
-    Добавляет брендированную плашку с названием канала в правом нижнем углу,
-    полностью перекрывая логотип Pollinations.ai.
-    """
+    """Добавляет брендированную плашку с названием канала в правом нижнем углу."""
     try:
         img = Image.open(image_path).convert("RGB")
         w, h = img.size
         draw = ImageDraw.Draw(img)
 
-        # Настройки под каждый канал
         if channel_key == "cyber":
             text = "CyberGuardianSec"
-            bg_color = (10, 20, 50)        # тёмно-синий
-            border_color = (0, 255, 150)   # неоново-зелёный
+            bg_color = (10, 20, 50)
+            border_color = (0, 255, 150)
             text_color = (255, 255, 255)
         else:
             text = "AI Navigator"
-            bg_color = (40, 10, 60)        # тёмно-фиолетовый
+            bg_color = (40, 10, 60)
             border_color = (0, 255, 130)
             text_color = (255, 255, 255)
 
-        # Размеры плашки (расширены, чтобы точно перекрыть логотип)
-        pad_x = int(w * 0.01)          # уменьшен отступ справа
+        pad_x = int(w * 0.01)
         pad_y = int(h * 0.012)
-        logo_w = int(w * 0.38)         # шире, чтобы захватить логотип
+        logo_w = int(w * 0.38)
         logo_h = int(h * 0.065)
         x1 = w - logo_w - pad_x
         y1 = h - logo_h - pad_y
         x2 = w - pad_x
         y2 = h - pad_y
 
-        # Фон плашки с рамкой
         draw.rectangle([x1, y1, x2, y2], fill=bg_color, outline=border_color, width=2)
 
-        # Шрифт
         font_size = int(logo_h * 0.55)
         font = None
         for font_name in ["arial.ttf", "DejaVuSans-Bold.ttf", "DejaVuSans.ttf"]:
@@ -190,7 +233,6 @@ def _add_branding(image_path: str, channel_key: str = "cyber"):
         if font is None:
             font = ImageFont.load_default()
 
-        # Центрируем текст
         try:
             bbox = draw.textbbox((0, 0), text, font=font)
             tw = bbox[2] - bbox[0]
@@ -204,27 +246,38 @@ def _add_branding(image_path: str, channel_key: str = "cyber"):
         draw.text((tx, ty), text, font=font, fill=text_color)
 
         img.save(image_path, "PNG")
-        print(f"   🏷️ Добавлена плашка: {text}")
+        print(f"   🏷️ Плашка: {text}")
         return True
     except Exception as e:
-        print(f"   ⚠️ Не удалось добавить плашку: {e}")
+        print(f"   ⚠️ Ошибка плашки: {e}")
         return False
 
 
 async def generate_image(topic: str, channel_key: str = "cyber") -> str:
-    """Генерирует картинку, скачивает, добавляет брендинг. Возвращает путь к файлу."""
-    style_template = IMAGE_STYLES.get(channel_key, IMAGE_STYLES["cyber"])
-    image_prompt = style_template.format(topic=topic)
+    """Генерирует УНИКАЛЬНУЮ картинку с рандомизацией стиля."""
+    style = IMAGE_STYLES.get(channel_key, IMAGE_STYLES["cyber"])
 
-    clean_prompt = urllib.parse.quote(image_prompt[:400])
+    subject = random.choice(style["subjects"])
+    composition = random.choice(style["compositions"])
+    mood = random.choice(style["moods"])
+
+    image_prompt = (
+        f"{style['base'].format(topic=topic)}. "
+        f"Subject: {subject}. "
+        f"Composition: {composition}. "
+        f"Mood: {mood}."
+    )
+
+    clean_prompt = urllib.parse.quote(image_prompt[:500])
+    seed = random.randint(1, 999999)
     url = (
         f"https://image.pollinations.ai/prompt/{clean_prompt}"
-        f"?width=1024&height=1024&nologo=true&model=flux"
+        f"?width=1024&height=1024&nologo=true&model=flux&seed={seed}"
     )
     if POLLINATIONS_API_KEY:
         url += f"&key={POLLINATIONS_API_KEY}"
 
-    filename = f"{channel_key}_{abs(hash(topic)) % 100000}.png"
+    filename = f"{channel_key}_{abs(hash(topic + str(seed))) % 100000}.png"
     filepath = os.path.join(IMAGES_DIR, filename)
 
     try:
@@ -237,7 +290,8 @@ async def generate_image(topic: str, channel_key: str = "cyber") -> str:
                 with open(filepath, "wb") as f:
                     f.write(content)
         _add_branding(filepath, channel_key)
+        print(f"   🎨 {composition}, {mood}")
         return filepath
     except Exception as e:
-        print(f"⚠️ Ошибка скачивания картинки: {e}")
+        print(f"⚠️ Ошибка картинки: {e}")
         return url
