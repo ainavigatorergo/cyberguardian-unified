@@ -2,8 +2,10 @@ import aiohttp
 import urllib.parse
 import json
 import os
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from config import PROVOD_API_KEY, OPENROUTER_API_KEY, CHANNELS, DATA_DIR
+
+POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "sk_IO2JusirCuHRbVzBfZ6EEoDUkcjyRqU6")
 
 PROVOD_URL = "https://api.provod.ai/v1/chat/completions"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -116,13 +118,9 @@ async def generate_post(topic: str, channel_key: str) -> str:
     profile = CHANNELS[channel_key]
 
     if channel_key == "cyber":
-        extra = (
-            "Акцент на защиту и практические советы. Тон: спокойный, экспертный, без паники."
-        )
+        extra = "Акцент на защиту и практические советы. Тон: спокойный, экспертный, без паники."
     else:
-        extra = (
-            "Акцент на инструменты и кейсы. Тон: дружелюбный, практичный, с примерами."
-        )
+        extra = "Акцент на инструменты и кейсы. Тон: дружелюбный, практичный, с примерами."
 
     prompt = f"""
 {profile['prompt_prefix']}
@@ -145,23 +143,76 @@ async def generate_post(topic: str, channel_key: str) -> str:
     return await _smart_call(prompt)
 
 
-def _crop_watermark(image_path: str):
-    """Обрезает нижнюю полосу картинки, где расположен логотип Pollinations."""
+def _add_branding(image_path: str, channel_key: str = "cyber"):
+    """
+    Добавляет брендированную плашку с названием канала в правом нижнем углу,
+    перекрывая логотип Pollinations.ai.
+    """
     try:
-        img = Image.open(image_path)
+        img = Image.open(image_path).convert("RGB")
         w, h = img.size
-        # Обрезаем нижние 8% и правые 15% (там логотип)
-        cropped = img.crop((0, 0, int(w * 0.85), int(h * 0.93)))
-        cropped.save(image_path, "PNG")
-        print(f"   ✂️ Логотип обрезан")
+        draw = ImageDraw.Draw(img)
+
+        # Настройки под каждый канал
+        if channel_key == "cyber":
+            text = "CyberGuardianSec"
+            bg_color = (10, 20, 50)        # тёмно-синий
+            border_color = (0, 255, 150)   # неоново-зелёный
+            text_color = (255, 255, 255)
+        else:
+            text = "AI Navigator"
+            bg_color = (40, 10, 60)        # тёмно-фиолетовый
+            border_color = (0, 255, 130)
+            text_color = (255, 255, 255)
+
+        # Размеры плашки
+        pad_x = int(w * 0.02)
+        pad_y = int(h * 0.012)
+        logo_w = int(w * 0.32)
+        logo_h = int(h * 0.065)
+        x1 = w - logo_w - pad_x
+        y1 = h - logo_h - pad_y
+        x2 = w - pad_x
+        y2 = h - pad_y
+
+        # Фон плашки с рамкой
+        draw.rectangle([x1, y1, x2, y2], fill=bg_color, outline=border_color, width=2)
+
+        # Шрифт
+        font_size = int(logo_h * 0.55)
+        font = None
+        for font_name in ["arial.ttf", "DejaVuSans-Bold.ttf", "DejaVuSans.ttf"]:
+            try:
+                font = ImageFont.truetype(font_name, font_size)
+                break
+            except:
+                continue
+        if font is None:
+            font = ImageFont.load_default()
+
+        # Центрируем текст
+        try:
+            bbox = draw.textbbox((0, 0), text, font=font)
+            tw = bbox[2] - bbox[0]
+            th = bbox[3] - bbox[1]
+        except:
+            tw, th = len(text) * font_size // 2, font_size
+
+        tx = x1 + (logo_w - tw) // 2
+        ty = y1 + (logo_h - th) // 2 - int(logo_h * 0.1)
+
+        draw.text((tx, ty), text, font=font, fill=text_color)
+
+        img.save(image_path, "PNG")
+        print(f"   🏷️ Добавлена плашка: {text}")
         return True
     except Exception as e:
-        print(f"   ⚠️ Не удалось обрезать логотип: {e}")
+        print(f"   ⚠️ Не удалось добавить плашку: {e}")
         return False
 
 
 async def generate_image(topic: str, channel_key: str = "cyber") -> str:
-    """Генерирует картинку, скачивает, обрезает логотип. Возвращает путь к файлу."""
+    """Генерирует картинку, скачивает, добавляет брендинг. Возвращает путь к файлу."""
     style_template = IMAGE_STYLES.get(channel_key, IMAGE_STYLES["cyber"])
     image_prompt = style_template.format(topic=topic)
 
@@ -170,6 +221,8 @@ async def generate_image(topic: str, channel_key: str = "cyber") -> str:
         f"https://image.pollinations.ai/prompt/{clean_prompt}"
         f"?width=1024&height=1024&nologo=true&model=flux"
     )
+    if POLLINATIONS_API_KEY:
+        url += f"&key={POLLINATIONS_API_KEY}"
 
     filename = f"{channel_key}_{abs(hash(topic)) % 100000}.png"
     filepath = os.path.join(IMAGES_DIR, filename)
@@ -183,7 +236,7 @@ async def generate_image(topic: str, channel_key: str = "cyber") -> str:
                 content = await resp.read()
                 with open(filepath, "wb") as f:
                     f.write(content)
-        _crop_watermark(filepath)
+        _add_branding(filepath, channel_key)
         return filepath
     except Exception as e:
         print(f"⚠️ Ошибка скачивания картинки: {e}")
