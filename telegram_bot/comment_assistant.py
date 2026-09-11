@@ -3,11 +3,10 @@ import json
 import os
 import re
 from datetime import datetime
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import aiohttp
 from config import DATA_DIR
 
-# === Куда слать дайджест (твой юзернейм или ID) ===
+# === Куда слать дайджест ===
 ADMIN_USERNAME = "@kostaErgo"
 
 # === Ключевые слова для поиска каналов ===
@@ -16,11 +15,13 @@ SEARCH_KEYWORDS = {
         "кибербезопасность", "cybersecurity", "инфобез", "infosec",
         "хакеры", "hacking", "утечки", "data breach", "уязвимость",
         "защита данных", "приватность", "VPN", "пароли", "фишинг",
+        "безопасность", "security", "malware", "атака",
     ],
     "ai": [
         "нейросети", "нейросеть", "AI", "artificial intelligence", "ChatGPT",
         "машинное обучение", "machine learning", "AI для бизнеса",
         "автоматизация", "промпты", "Midjourney", "GPT", "LLM",
+        "искусственный интеллект", "нейронные сети",
     ],
 }
 
@@ -30,16 +31,17 @@ SEED_CHANNELS = {
         "cybersecurity_ru", "infosecurity", "securitylab", "kaspersky",
         "positive_technologies", "bizone_ru", "cisoclub", "true_sec",
         "codeby_ru", "xakep_ru", "anti_malware", "cnews_ru",
+        "sec_ru", "bugbounty_ru", "pentestit", "security_moscow",
     ],
     "ai": [
         "ai_news_ru", "neural_networks", "gpt_ru", "ai_art_ru",
         "openai_ru", "data_secrets", "aiconference", "neuro_ru",
         "ai_for_business", "gpt_chat_ru", "midjourney_ru", "stablediffusion_ru",
+        "ai_daily", "machinelearning_ru", "deep_learning_ru", "prompt_engineering",
     ],
 }
 
 SEEN_FILE = os.path.join(DATA_DIR, "seen_channels.json")
-POSTED_FILE = os.path.join(DATA_DIR, "commented_posts.json")
 
 
 def _load_json(path, default):
@@ -127,13 +129,13 @@ async def discover_channels(channel_key: str, max_new: int = 5) -> list:
 
 
 async def send_daily_digest(bot):
-    """Отправляет админу список каналов для комментирования по обоим каналам."""
+    """Отправляет админу дайджест по обоим каналам. Запускается вручную."""
     if not ADMIN_USERNAME:
         print("ℹ️ ADMIN_USERNAME не задан")
-        return
+        return False
 
     # === Дайджест для КИБЕР ===
-    cyber_digest = "🔐 <b>Ассистент: CyberGuardianSec</b>\n"
+    cyber_digest = "🔐 <b>Комментирование: CyberGuardianSec</b>\n"
     cyber_digest += "Куда зайти сегодня и оставить комментарий:\n\n"
 
     cyber_channels = await discover_channels("cyber", max_new=5)
@@ -151,11 +153,11 @@ async def send_daily_digest(bot):
         "• Без ссылок на свой канал\n"
         "• Полезный экспертный комментарий\n"
         "• 2–3 предложения\n\n"
-        "✍️ Пришли мне текст поста — дам 3 варианта комментария."
+        "✍️ Пришли текст поста — дам 3 варианта."
     )
 
     # === Дайджест для AI ===
-    ai_digest = "🤖 <b>Ассистент: AI Navigator</b>\n"
+    ai_digest = "🤖 <b>Комментирование: AI Navigator</b>\n"
     ai_digest += "Куда зайти сегодня и оставить комментарий:\n\n"
 
     ai_channels = await discover_channels("ai", max_new=5)
@@ -173,39 +175,29 @@ async def send_daily_digest(bot):
         "• Без ссылок на свой канал\n"
         "• Полезный экспертный комментарий\n"
         "• 2–3 предложения\n\n"
-        "✍️ Пришли мне текст поста — дам 3 варианта комментария."
+        "✍️ Пришли текст поста — дам 3 варианта."
     )
 
-    # Отправляем оба дайджеста
+    # Отправляем
     try:
-        # Сначала шапка
         await bot.send_message(
             ADMIN_USERNAME,
-            "🔔 <b>Ежедневный дайджест для комментирования</b>\n"
+            "🔔 <b>Дайджест для комментирования</b>\n"
             f"📅 {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
-            "Ниже — по 5 каналов для каждого направления. "
-            "Зайди, оставь полезный комментарий — получишь органический трафик."
+            "Ниже — по 5 каналов для каждого направления."
         )
         await asyncio.sleep(1)
         await bot.send_message(ADMIN_USERNAME, cyber_digest)
         await asyncio.sleep(1)
         await bot.send_message(ADMIN_USERNAME, ai_digest)
         print("✅ Дайджесты (cyber + ai) отправлены")
+        return True
     except Exception as e:
         print(f"⚠️ Ошибка отправки: {e}")
         print("   Убедись, что ты написал боту /start первым!")
+        return False
 
 
 def start_comment_assistant(bot):
-    """Запускает планировщик ассистента (2 раза в день)."""
-    if not ADMIN_USERNAME:
-        print("ℹ️ Ассистент комментирования отключён")
-        return
-
-    scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
-    # Утро: 09:00 МСК
-    scheduler.add_job(send_daily_digest, "cron", hour=9, minute=0, args=[bot])
-    # Вечер: 17:00 МСК
-    scheduler.add_job(send_daily_digest, "cron", hour=17, minute=0, args=[bot])
-    scheduler.start()
-    print("✅ Ассистент комментирования запущен (09:00 и 17:00 МСК)")
+    """Заглушка: автозапуск отключён. Дайджест вызывается вручную командой /digest."""
+    print("ℹ️ Ассистент комментирования: автозапуск отключён (используй /digest)")
