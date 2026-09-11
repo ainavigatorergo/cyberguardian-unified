@@ -39,7 +39,7 @@ async def publish_post(bot, channel_key: str):
 
     try:
         post_text = await generate_post(topic, channel_key)
-        image_url = await generate_image(topic)
+        image_url = await generate_image(topic, channel_key)
 
         # Отправляем фото + текст
         if len(post_text) <= 1024:
