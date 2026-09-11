@@ -26,6 +26,10 @@ def save_json(filename, data):
 
 async def publish_post(bot, channel_key: str):
     profile = CHANNELS[channel_key]
+    emoji = "🔐" if channel_key == "cyber" else "🤖"
+
+    print(f"\n{emoji} === Публикация для канала: {channel_key} ({profile['name']}) ===")
+
     used = load_json("used_topics.json", {"cyber": [], "ai": []})
 
     # Берём тему, которой ещё не было
@@ -35,11 +39,18 @@ async def publish_post(bot, channel_key: str):
         return
 
     topic = available[0]
-    print(f"📝 Публикация для {channel_key}: {topic}")
+    print(f"📝 Тема: {topic}")
 
     try:
+        print("⏳ Генерирую текст поста...")
         post_text = await generate_post(topic, channel_key)
+        print(f"✅ Текст готов ({len(post_text)} символов)")
+
+        print("🎨 Генерирую картинку...")
         image_url = await generate_image(topic, channel_key)
+        print(f"✅ Картинка: {image_url[:80]}...")
+
+        print(f"📤 Публикую в {profile['telegram_channel']}...")
 
         # Отправляем фото + текст
         if len(post_text) <= 1024:
@@ -55,10 +66,10 @@ async def publish_post(bot, channel_key: str):
         # Записываем тему в использованные
         used.setdefault(channel_key, []).append(topic)
         save_json("used_topics.json", used)
-        print(f"✅ Опубликовано в {profile['telegram_channel']}")
+        print(f"🎉 Опубликовано в {profile['telegram_channel']}\n")
 
     except Exception as e:
-        print(f"❌ Ошибка публикации: {e}")
+        print(f"❌ Ошибка публикации для {channel_key}: {e}\n")
 
 
 def start_scheduler(bot):
@@ -82,4 +93,6 @@ def start_scheduler(bot):
     )
 
     scheduler.start()
-    print("✅ Планировщик запущен (4 поста в день)")
+    print("✅ Планировщик запущен (4 поста в день):")
+    print("   🔐 cyber: 10:00, 19:00 МСК")
+    print("   🤖 ai:    11:00, 20:00 МСК")
