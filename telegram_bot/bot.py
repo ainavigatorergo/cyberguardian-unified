@@ -16,7 +16,7 @@ import threading
 from config import BOT_TOKEN, CHANNELS
 from generator import generate_post, generate_image, generate_ideas
 from scheduler import start_scheduler
-from comment_assistant import send_daily_digest
+from comment_assistant import send_daily_digest, save_admin_chat_id
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -100,6 +100,12 @@ async def _send_preview(chat_id, post_text, image_path, channel_key, reply_marku
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
+    # Сохраняем chat_id для дайджестов
+    try:
+        save_admin_chat_id(message.chat.id)
+    except Exception as e:
+        logger.warning(f"Не удалось сохранить chat_id: {e}")
+
     await message.answer(
         "👋 Привет! Я бот для двух каналов:\n"
         "🔐 <b>CyberGuardianSec</b> — кибербезопасность\n"
@@ -116,7 +122,7 @@ async def cmd_digest(message: types.Message):
     try:
         result = await send_daily_digest(bot)
         if result:
-            await message.answer("✅ Дайджест отправлен в личку @kostaErgo")
+            await message.answer("✅ Дайджест отправлен в личку")
         else:
             await message.answer("⚠️ Не удалось отправить дайджест. Проверь логи.")
     except Exception as e:
@@ -131,7 +137,7 @@ async def menu_digest(callback: types.CallbackQuery):
     try:
         result = await send_daily_digest(bot)
         if result:
-            await callback.message.answer("✅ Дайджест отправлен в личку @kostaErgo")
+            await callback.message.answer("✅ Дайджест отправлен в личку")
         else:
             await callback.message.answer("⚠️ Не удалось отправить. Проверь логи Render.")
     except Exception as e:
@@ -422,7 +428,7 @@ async def handle_manual_post(message: types.Message):
         await message.answer(f"❌ Ошибка: {e}")
 
 
-# === Flask ===
+# === Flask для Render ===
 @app.route("/")
 def health():
     return "OK", 200
