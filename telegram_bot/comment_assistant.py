@@ -6,8 +6,8 @@ from datetime import datetime
 import aiohttp
 from config import DATA_DIR
 
-# === Куда слать дайджест ===
-ADMIN_USERNAME = "@kostaErgo"
+# === Файл для хранения chat_id админа ===
+ADMIN_FILE = os.path.join(DATA_DIR, "admin_chat.json")
 
 # === Ключевые слова для поиска каналов ===
 SEARCH_KEYWORDS = {
@@ -57,6 +57,18 @@ def _load_json(path, default):
 def _save_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def save_admin_chat_id(chat_id: int):
+    """Сохраняет chat_id админа для отправки дайджестов."""
+    _save_json(ADMIN_FILE, {"chat_id": chat_id})
+    print(f"✅ Сохранён admin chat_id: {chat_id}")
+
+
+def get_admin_chat_id():
+    """Возвращает сохранённый chat_id админа или None."""
+    data = _load_json(ADMIN_FILE, {})
+    return data.get("chat_id")
 
 
 async def _check_channel_web_preview(channel: str) -> dict:
@@ -129,9 +141,10 @@ async def discover_channels(channel_key: str, max_new: int = 5) -> list:
 
 
 async def send_daily_digest(bot):
-    """Отправляет админу дайджест по обоим каналам. Запускается вручную."""
-    if not ADMIN_USERNAME:
-        print("ℹ️ ADMIN_USERNAME не задан")
+    """Отправляет дайджест по обоим каналам."""
+    admin_chat_id = get_admin_chat_id()
+    if not admin_chat_id:
+        print("⚠️ admin_chat_id не найден. Напиши боту /start")
         return False
 
     # === Дайджест для КИБЕР ===
@@ -181,23 +194,17 @@ async def send_daily_digest(bot):
     # Отправляем
     try:
         await bot.send_message(
-            ADMIN_USERNAME,
+            admin_chat_id,
             "🔔 <b>Дайджест для комментирования</b>\n"
             f"📅 {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
             "Ниже — по 5 каналов для каждого направления."
         )
         await asyncio.sleep(1)
-        await bot.send_message(ADMIN_USERNAME, cyber_digest)
+        await bot.send_message(admin_chat_id, cyber_digest)
         await asyncio.sleep(1)
-        await bot.send_message(ADMIN_USERNAME, ai_digest)
-        print("✅ Дайджесты (cyber + ai) отправлены")
+        await bot.send_message(admin_chat_id, ai_digest)
+        print("✅ Дайджесты отправлены")
         return True
     except Exception as e:
         print(f"⚠️ Ошибка отправки: {e}")
-        print("   Убедись, что ты написал боту /start первым!")
         return False
-
-
-def start_comment_assistant(bot):
-    """Заглушка: автозапуск отключён. Дайджест вызывается вручную командой /digest."""
-    print("ℹ️ Ассистент комментирования: автозапуск отключён (используй /digest)")
