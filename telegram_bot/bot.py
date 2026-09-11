@@ -42,6 +42,7 @@ def main_menu():
             InlineKeyboardButton(text="💡 Идеи тем", callback_data="menu_ideas"),
             InlineKeyboardButton(text="📊 Статус", callback_data="menu_status"),
         ],
+        [InlineKeyboardButton(text="🔔 Дайджест каналов", callback_data="menu_digest")],
         [InlineKeyboardButton(text="📢 Опубликовать вручную", callback_data="menu_manual")],
     ])
 
@@ -103,9 +104,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
         "👋 Привет! Я бот для двух каналов:\n"
         "🔐 <b>CyberGuardianSec</b> — кибербезопасность\n"
         "🤖 <b>AI Navigator</b> — нейросети и автоматизация\n\n"
-        "Команды:\n"
-        "/digest — дайджест каналов для комментирования\n\n"
-        "Или выбери действие 👇",
+        "Выбери действие 👇",
         reply_markup=main_menu()
     )
 
@@ -122,6 +121,21 @@ async def cmd_digest(message: types.Message):
             await message.answer("⚠️ Не удалось отправить дайджест. Проверь логи.")
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
+
+
+# === Кнопка "🔔 Дайджест каналов" ===
+@dp.callback_query(F.data == "menu_digest")
+async def menu_digest(callback: types.CallbackQuery):
+    await callback.message.edit_text("🔍 Ищу подходящие каналы... Это займёт 30–60 секунд.")
+    await callback.answer()
+    try:
+        result = await send_daily_digest(bot)
+        if result:
+            await callback.message.answer("✅ Дайджест отправлен в личку @kostaErgo")
+        else:
+            await callback.message.answer("⚠️ Не удалось отправить. Проверь логи Render.")
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка: {e}")
 
 
 # === СТАТУС ===
