@@ -14,6 +14,22 @@ OPENROUTER_MODELS = [
     "google/gemma-3-12b-it:free",
 ]
 
+# === Промпты для картинок под каждый канал ===
+IMAGE_STYLES = {
+    "cyber": (
+        "Cybersecurity concept illustration, {topic}, "
+        "dark navy blue and neon green colors, digital shield, padlock, "
+        "circuit board elements, futuristic tech style, "
+        "no text, no people, no faces, cinematic lighting, high quality"
+    ),
+    "ai": (
+        "Artificial intelligence concept illustration, {topic}, "
+        "dark purple and neon green colors, glowing neural network, "
+        "robot brain, digital particles, futuristic tech style, "
+        "no text, no people, no faces, cinematic lighting, high quality"
+    ),
+}
+
 
 async def _call_api(url: str, api_key: str, model: str, prompt: str):
     """Универсальный вызов API (provod.ai или OpenRouter)."""
@@ -35,12 +51,29 @@ async def _call_api(url: str, api_key: str, model: str, prompt: str):
 
 
 async def generate_post(topic: str, channel_key: str) -> str:
-    """Генерирует пост для Telegram-канала."""
+    """Генерирует пост для Telegram-канала (свой стиль для каждого)."""
     profile = CHANNELS[channel_key]
+
+    # Дополнительные требования под каждый канал
+    if channel_key == "cyber":
+        extra = (
+            "Акцент на защиту, угрозы, практические советы. "
+            "Примеры: фишинг, утечки, взломы, VPN, пароли. "
+            "Тон: спокойный, экспертный, без паники."
+        )
+    else:  # ai
+        extra = (
+            "Акцент на инструменты, кейсы, автоматизацию. "
+            "Примеры: ChatGPT, Midjourney, промпты, нейросети для бизнеса. "
+            "Тон: дружелюбный, практичный, с примерами."
+        )
+
     prompt = f"""
 {profile['prompt_prefix']}
 
 Стиль: {profile['style']}
+
+Особенности канала: {extra}
 
 Напиши пост для Telegram-канала на тему: {topic}
 
@@ -50,7 +83,7 @@ async def generate_post(topic: str, channel_key: str) -> str:
 - 2–3 абзаца по делу.
 - Дай 3 практических совета или шага.
 - Заверши вопросом к читателям для вовлечения.
-- Добавь 3–5 хештегов.
+- Добавь 3–5 хештегов, соответствующих каналу.
 - Без воды, без кликбейта, без паники.
 """
 
@@ -72,8 +105,17 @@ async def generate_post(topic: str, channel_key: str) -> str:
     raise Exception("Все модели недоступны")
 
 
-async def generate_image(prompt: str) -> str:
-    """Генерирует картинку через Pollinations.ai (бесплатно, без ключей)."""
-    clean_prompt = urllib.parse.quote(prompt[:200])
-    url = f"https://image.pollinations.ai/prompt/{clean_prompt}?width=1024&height=1024&nologo=true"
+async def generate_image(topic: str, channel_key: str = "cyber") -> str:
+    """
+    Генерирует тематическую картинку через Pollinations.ai.
+    Стиль зависит от канала: cyber или ai.
+    """
+    style_template = IMAGE_STYLES.get(channel_key, IMAGE_STYLES["cyber"])
+    image_prompt = style_template.format(topic=topic)
+
+    clean_prompt = urllib.parse.quote(image_prompt[:400])
+    url = (
+        f"https://image.pollinations.ai/prompt/{clean_prompt}"
+        f"?width=1024&height=1024&nologo=true&model=flux"
+    )
     return url
