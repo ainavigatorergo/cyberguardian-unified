@@ -16,6 +16,7 @@ import threading
 from config import BOT_TOKEN, CHANNELS
 from generator import generate_post, generate_image, generate_ideas
 from scheduler import start_scheduler
+from comment_assistant import start_comment_assistant
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -79,7 +80,7 @@ def approve_inline():
 
 # === ОТПРАВКА ПРЕВЬЮ ===
 async def _send_preview(chat_id, post_text, image_path, channel_key, reply_markup=None):
-    """Отправляет превью с фото и подписью. Использует bot.send_photo по chat_id."""
+    """Отправляет превью с фото и подписью."""
     if len(post_text) > 1024:
         post_text = post_text[:1020] + "..."
 
@@ -129,13 +130,12 @@ async def menu_status(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# === НАЗАД (работает и для текста, и для фото) ===
+# === НАЗАД ===
 @dp.callback_query(F.data == "menu_back")
 async def menu_back(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     text = "👋 Главное меню:"
     try:
-        # Если у сообщения есть caption — значит это фото
         if callback.message.caption:
             await callback.message.delete()
             await callback.message.answer(text, reply_markup=main_menu())
@@ -250,7 +250,6 @@ async def use_idea(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(channel_key=channel_key)
     await callback.answer()
 
-    # Сообщаем о генерации
     try:
         await callback.message.edit_text(f"{emoji} Генерирую пост на тему: <i>{topic}</i>... ⏳")
     except:
@@ -269,7 +268,6 @@ async def use_idea(callback: types.CallbackQuery, state: FSMContext):
         )
         await state.set_state(PostFlow.approving)
 
-        # Удаляем сообщение "генерирую" и отправляем превью
         try:
             await callback.message.delete()
         except:
@@ -386,10 +384,8 @@ async def approve_regen(callback: types.CallbackQuery, state: FSMContext):
     channel_key = data.get("channel_key", "cyber")
     emoji = "🔐" if channel_key == "cyber" else "🤖"
 
-    # Запоминаем chat_id до удаления
     chat_id = callback.message.chat.id
 
-    # Сообщаем о начале генерации
     try:
         await callback.message.edit_caption(caption=f"{emoji} Генерирую заново... ⏳")
     except:
@@ -405,13 +401,11 @@ async def approve_regen(callback: types.CallbackQuery, state: FSMContext):
         image_path = await generate_image(topic, channel_key)
         await state.update_data(post_text=post_text, image_url=image_path)
 
-        # Удаляем старое превью
         try:
             await callback.message.delete()
         except:
             pass
 
-        # Отправляем новое превью
         await _send_preview(chat_id, post_text, image_path, channel_key)
     except Exception as e:
         logger.error(f"Ошибка перегенерации: {e}")
@@ -480,6 +474,7 @@ def run_flask():
 async def main():
     logger.info("🚀 Бот запущен")
     start_scheduler(bot)
+    start_comment_assistant(bot)
     await dp.start_polling(bot)
 
 
