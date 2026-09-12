@@ -6,11 +6,22 @@ import random
 from PIL import Image, ImageDraw, ImageFont
 from config import (
     PROVOD_API_KEY, OPENROUTER_API_KEY, CHANNELS, DATA_DIR,
-    RUBRICS, POLLINATIONS_API_KEY, GEMINI_MODEL
+    RUBRICS, POLLINATIONS_API_KEY
 )
 
 PROVOD_URL = "https://api.provod.ai/v1/chat/completions"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+# === Модели provod.ai (пробуем все по очереди) ===
+PROVOD_MODELS = [
+    "gemini-3.5-flash",
+    "google/gemini-3.5-flash",
+    "gemini-3.5-flash-preview",
+    "gemini-2.5-flash",
+    "google/gemini-2.5-flash",
+    "gemini-3.1-flash",
+    "gemini-3.1-pro-preview",
+]
 
 # === Модели OpenRouter (бесплатные) ===
 OPENROUTER_MODELS = [
@@ -19,6 +30,8 @@ OPENROUTER_MODELS = [
     "nvidia/nemotron-nano-9b-v2:free",
     "z-ai/glm-4.5-air:free",
     "google/gemma-3-12b-it:free",
+    "qwen/qwen-2.5-72b-instruct:free",
+    "mistralai/mistral-7b-instruct:free",
 ]
 
 IMAGE_STYLES = {
@@ -129,20 +142,25 @@ async def _call_api(url: str, api_key: str, model: str, prompt: str, temperature
                 data = await resp.json()
                 return data["choices"][0]["message"]["content"]
             error_text = await resp.text()
-            raise Exception(f"API error: {resp.status} - {error_text[:200]}")
+            raise Exception(f"API error: {resp.status} - {error_text[:150]}")
 
 
 async def _smart_call(prompt: str, temperature: float = 0.85):
-    """Пробует provod.ai, потом OpenRouter."""
-    # Пробуем provod.ai
-    try:
-        result = await _call_api(PROVOD_URL, PROVOD_API_KEY, GEMINI_MODEL, prompt, temperature)
-        print("   ✅ Ответ от provod.ai")
-        return result
-    except Exception as e:
-        print(f"⚠️ Provod.ai: {e}, пробуем OpenRouter...")
+    """Пробует provod.ai (все модели), потом OpenRouter."""
+    # === Пробуем provod.ai — перебираем все модели ===
+    for model in PROVOD_MODELS:
+        try:
+            result = await _call_api(PROVOD_URL, PROVOD_API_KEY, model, prompt, temperature)
+            print(f"   ✅ Ответ от provod.ai ({model})")
+            return result
+        except Exception as e:
+            error_short = str(e)[:120]
+            print(f"   ⚠️ provod.ai [{model}]: {error_short}")
+            continue
 
-    # Пробуем OpenRouter
+    print("⚠️ Все модели provod.ai не сработали, пробуем OpenRouter...")
+
+    # === Пробуем OpenRouter ===
     if OPENROUTER_API_KEY:
         for model in OPENROUTER_MODELS:
             try:
@@ -150,7 +168,8 @@ async def _smart_call(prompt: str, temperature: float = 0.85):
                 print(f"   ✅ Ответ от OpenRouter ({model})")
                 return result
             except Exception as e:
-                print(f"⚠️ {model}: {e}")
+                error_short = str(e)[:120]
+                print(f"   ⚠️ OpenRouter [{model}]: {error_short}")
                 continue
     else:
         print("⚠️ OPENROUTER_API_KEY не задан!")
@@ -163,7 +182,6 @@ async def _smart_call(prompt: str, temperature: float = 0.85):
 # ============================================================
 
 async def is_topic_unique(topic: str, channel_key: str) -> bool:
-    """Семантическая проверка: похожа ли тема на уже использованные."""
     used = load_used_topics().get(channel_key, [])
     if not used:
         return True
@@ -172,14 +190,14 @@ async def is_topic_unique(topic: str, channel_key: str) -> bool:
     used_str = "\n".join([f"- {t}" for t in recent])
 
     prompt = f"""
-Ты — редактор. Проверь, похожа ли новая тема на уже использованные по СМЫСЛУ (не только по словам).
+Ты — редактор. Проверь, похожа ли новая тема на уже использованные по СМЫСЛУ.
 
 Новая тема: "{topic}"
 
 Уже использованные темы:
 {used_str}
 
-Если новая тема СЕМАНТИЧЕСКИ похожа хотя бы на одну из списка (та же тема другими словами, тот же аспект), ответь: ПОХОЖА
+Если новая тема СЕМАНТИЧЕСКИ похожа хотя бы на одну, ответь: ПОХОЖА
 Если тема действительно новая — ответь: УНИКАЛЬНА
 
 Отвечай только одним словом: ПОХОЖА или УНИКАЛЬНА.
@@ -260,20 +278,18 @@ async def generate_post(topic: str, channel_key: str, rubric: dict = None) -> st
 
 Требования (ВАЖНО):
 - Длина поста: СТРОГО 700–900 символов (не больше!).
-- Начни с цепляющего заголовка с эмодзи и названием рубрики (если рубрика задана).
+- Начни с цепляющего заголовка с эмодзи.
 - 2 абзаца по делу.
 - 3 практических совета или шага.
 - Заверши коротким вопросом к читателям.
 - Добавь 4 хештега.
 - Без воды, без кликбейта.
-
-Пост должен быть компактным, но полезным.
 """
     return await _smart_call(prompt)
 
 
 # ============================================================
-# ГЕНЕРАЦИЯ ЛОНГРИДА (для субботы)
+# ГЕНЕРАЦИЯ ЛОНГРИДА
 # ============================================================
 
 async def generate_longread(topic: str, channel_key: str, rubric: dict = None) -> str:
@@ -294,23 +310,20 @@ async def generate_longread(topic: str, channel_key: str, rubric: dict = None) -
 Требования:
 - Длина: 1800–2500 символов.
 - Начни с цепляющего заголовка с эмодзи.
-- Структура: вступление, 3–4 раздела с подзаголовками (жирным через HTML <b>), вывод.
+- Структура: вступление, 3–4 раздела с подзаголовками (через HTML <b>), вывод.
 - Разбирай тему подробно, с примерами и цифрами.
 - 5–7 практических советов.
 - Заверши вопросом к читателям.
 - Добавь 4 хештега.
-
-Это большой материал — дай глубину.
 """
     return await _smart_call(prompt, temperature=0.8)
 
 
 # ============================================================
-# ГЕНЕРАЦИЯ ОПРОСА (для среды)
+# ГЕНЕРАЦИЯ ОПРОСА
 # ============================================================
 
 async def generate_poll(topic: str, channel_key: str) -> dict:
-    """Генерирует опрос: вопрос + 3–4 варианта."""
     profile = CHANNELS[channel_key]
 
     prompt = f"""
@@ -325,9 +338,9 @@ async def generate_poll(topic: str, channel_key: str) -> dict:
 ВАРИАНТ: [вариант 3]
 
 Правила:
-- Вопрос вовлекающий, не банальный.
+- Вопрос вовлекающий.
 - 3 варианта, каждый до 30 символов.
-- Без правильного ответа (это опрос мнений, а не викторина).
+- Без правильного ответа.
 """
     response = await _smart_call(prompt, temperature=0.9)
 
