@@ -4,9 +4,10 @@ import json
 import os
 import random
 from PIL import Image, ImageDraw, ImageFont
-from config import PROVOD_API_KEY, OPENROUTER_API_KEY, CHANNELS, DATA_DIR
-
-POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "sk_IO2JusirCuHRbVzBfZ6EEoDUkcjyRqU6")
+from config import (
+    PROVOD_API_KEY, OPENROUTER_API_KEY, CHANNELS, DATA_DIR,
+    RUBRICS, POLLINATIONS_API_KEY, GEMINI_MODEL
+)
 
 PROVOD_URL = "https://api.provod.ai/v1/chat/completions"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -19,7 +20,6 @@ OPENROUTER_MODELS = [
     "google/gemma-3-12b-it:free",
 ]
 
-# === Рандомизированные стили картинок ===
 IMAGE_STYLES = {
     "cyber": {
         "base": (
@@ -86,20 +86,33 @@ IMAGE_STYLES = {
 IMAGES_DIR = os.path.join(DATA_DIR, "images")
 os.makedirs(IMAGES_DIR, exist_ok=True)
 
+USED_TOPICS_FILE = os.path.join(DATA_DIR, "used_topics.json")
 
-def _load_used_topics(channel_key):
-    path = os.path.join(DATA_DIR, "used_topics.json")
-    if not os.path.exists(path):
-        return []
+
+# ============================================================
+# ХРАНЕНИЕ ИСПОЛЬЗОВАННЫХ ТЕМ
+# ============================================================
+
+def load_used_topics():
+    if not os.path.exists(USED_TOPICS_FILE):
+        return {"cyber": [], "ai": []}
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data.get(channel_key, [])
+        with open(USED_TOPICS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
     except:
-        return []
+        return {"cyber": [], "ai": []}
 
 
-async def _call_api(url: str, api_key: str, model: str, prompt: str):
+def save_used_topics(data):
+    with open(USED_TOPICS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# ============================================================
+# API-ЗАПРОСЫ
+# ============================================================
+
+async def _call_api(url: str, api_key: str, model: str, prompt: str, temperature: float = 0.85):
     async with aiohttp.ClientSession() as session:
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -108,25 +121,29 @@ async def _call_api(url: str, api_key: str, model: str, prompt: str):
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.85,
+            "temperature": temperature,
         }
         async with session.post(url, headers=headers, json=payload, timeout=120) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 return data["choices"][0]["message"]["content"]
-            raise Exception(f"API error: {resp.status}")
+            error_text = await resp.text()
+            raise Exception(f"API error: {resp.status} - {error_text[:200]}")
 
 
-async def _smart_call(prompt: str):
+async def _smart_call(prompt: str, temperature: float = 0.85):
+    """Пробует provod.ai, потом OpenRouter."""
+    # Пробуем provod.ai
     try:
-        return await _call_api(PROVOD_URL, PROVOD_API_KEY, "gemini-3.5-flash", prompt)
+        return await _call_api(PROVOD_URL, PROVOD_API_KEY, GEMINI_MODEL, prompt, temperature)
     except Exception as e:
         print(f"⚠️ Provod.ai: {e}, пробуем OpenRouter...")
 
+    # Пробуем OpenRouter
     if OPENROUTER_API_KEY:
         for model in OPENROUTER_MODELS:
             try:
-                return await _call_api(OPENROUTER_URL, OPENROUTER_API_KEY, model, prompt)
+                return await _call_api(OPENROUTER_URL, OPENROUTER_API_KEY, model, prompt, temperature)
             except Exception as e:
                 print(f"⚠️ {model}: {e}")
                 continue
@@ -134,9 +151,50 @@ async def _smart_call(prompt: str):
     raise Exception("Все модели недоступны")
 
 
+# ============================================================
+# ПРОВЕРКА УНИКАЛЬНОСТИ ТЕМ
+# ============================================================
+
+async def is_topic_unique(topic: str, channel_key: str) -> bool:
+    """Семантическая проверка: похожа ли тема на уже использованные."""
+    used = load_used_topics().get(channel_key, [])
+    if not used:
+        return True
+
+    recent = used[-30:]
+    used_str = "\n".join([f"- {t}" for t in recent])
+
+    prompt = f"""
+Ты — редактор. Проверь, похожа ли новая тема на уже использованные по СМЫСЛУ (не только по словам).
+
+Новая тема: "{topic}"
+
+Уже использованные темы:
+{used_str}
+
+Если новая тема СЕМАНТИЧЕСКИ похожа хотя бы на одну из списка (та же тема другими словами, тот же аспект), ответь: ПОХОЖА
+Если тема действительно новая — ответь: УНИКАЛЬНА
+
+Отвечай только одним словом: ПОХОЖА или УНИКАЛЬНА.
+"""
+    try:
+        result = await _smart_call(prompt, temperature=0.3)
+        result = result.strip().upper()
+        is_unique = "УНИКАЛЬНА" in result
+        print(f"   🔍 Проверка '{topic}': {result}")
+        return is_unique
+    except Exception as e:
+        print(f"   ⚠️ Ошибка проверки: {e}")
+        return True
+
+
+# ============================================================
+# ГЕНЕРАЦИЯ ИДЕЙ
+# ============================================================
+
 async def generate_ideas(channel_key: str, count: int = 5) -> list:
     profile = CHANNELS[channel_key]
-    used = _load_used_topics(channel_key)
+    used = load_used_topics().get(channel_key, [])
     used_str = ", ".join(used[-20:]) if used else "пока ничего"
 
     if channel_key == "cyber":
@@ -164,7 +222,11 @@ async def generate_ideas(channel_key: str, count: int = 5) -> list:
     return ideas
 
 
-async def generate_post(topic: str, channel_key: str) -> str:
+# ============================================================
+# ГЕНЕРАЦИЯ ПОСТА
+# ============================================================
+
+async def generate_post(topic: str, channel_key: str, rubric: dict = None) -> str:
     profile = CHANNELS[channel_key]
 
     if channel_key == "cyber":
@@ -172,18 +234,28 @@ async def generate_post(topic: str, channel_key: str) -> str:
     else:
         extra = "Акцент на инструменты и кейсы. Тон: дружелюбный, практичный, с примерами."
 
+    if rubric:
+        rubric_block = f"""
+=== РУБРИКА ДНЯ ===
+Название: {rubric['name']}
+Задача: {rubric['task']}
+"""
+    else:
+        rubric_block = ""
+
     prompt = f"""
 {profile['prompt_prefix']}
 Стиль: {profile['style']}
 Особенности канала: {extra}
+{rubric_block}
 
 Напиши пост для Telegram-канала на тему: {topic}
 
 Требования (ВАЖНО):
 - Длина поста: СТРОГО 700–900 символов (не больше!).
-- Начни с цепляющего заголовка с эмодзи.
+- Начни с цепляющего заголовка с эмодзи и названием рубрики (если рубрика задана).
 - 2 абзаца по делу.
-- 3 практических совета (коротко).
+- 3 практических совета или шага.
 - Заверши коротким вопросом к читателям.
 - Добавь 4 хештега.
 - Без воды, без кликбейта.
@@ -193,8 +265,89 @@ async def generate_post(topic: str, channel_key: str) -> str:
     return await _smart_call(prompt)
 
 
+# ============================================================
+# ГЕНЕРАЦИЯ ЛОНГРИДА (для субботы)
+# ============================================================
+
+async def generate_longread(topic: str, channel_key: str, rubric: dict = None) -> str:
+    profile = CHANNELS[channel_key]
+
+    rubric_block = ""
+    if rubric:
+        rubric_block = f"Рубрика: {rubric['name']}. Задача: {rubric['task']}"
+
+    prompt = f"""
+{profile['prompt_prefix']}
+Стиль: {profile['style']}
+
+{rubric_block}
+
+Напиши ГЛУБОКИЙ пост-лонгрид на тему: {topic}
+
+Требования:
+- Длина: 1800–2500 символов.
+- Начни с цепляющего заголовка с эмодзи.
+- Структура: вступление, 3–4 раздела с подзаголовками (жирным через HTML <b>), вывод.
+- Разбирай тему подробно, с примерами и цифрами.
+- 5–7 практических советов.
+- Заверши вопросом к читателям.
+- Добавь 4 хештега.
+
+Это большой материал — дай глубину.
+"""
+    return await _smart_call(prompt, temperature=0.8)
+
+
+# ============================================================
+# ГЕНЕРАЦИЯ ОПРОСА (для среды)
+# ============================================================
+
+async def generate_poll(topic: str, channel_key: str) -> dict:
+    """Генерирует опрос: вопрос + 3–4 варианта."""
+    profile = CHANNELS[channel_key]
+
+    prompt = f"""
+Ты — контент-мейкер канала «{profile['name']}» ({profile['prompt_prefix']}).
+
+Придумай Telegram-опрос по теме: {topic}
+
+Формат ответа (СТРОГО):
+ВОПРОС: [вопрос до 100 символов]
+ВАРИАНТ: [вариант 1]
+ВАРИАНТ: [вариант 2]
+ВАРИАНТ: [вариант 3]
+
+Правила:
+- Вопрос вовлекающий, не банальный.
+- 3 варианта, каждый до 30 символов.
+- Без правильного ответа (это опрос мнений, а не викторина).
+"""
+    response = await _smart_call(prompt, temperature=0.9)
+
+    lines = response.split("\n")
+    question = ""
+    options = []
+    for line in lines:
+        line = line.strip()
+        if line.startswith("ВОПРОС:"):
+            question = line.replace("ВОПРОС:", "").strip()
+        elif line.startswith("ВАРИАНТ:"):
+            opt = line.replace("ВАРИАНТ:", "").strip()
+            if opt:
+                options.append(opt)
+
+    if not question or len(options) < 2:
+        question = f"Что для вас важнее в теме «{topic}»?"
+        options = ["Практика", "Теория", "Инструменты"]
+
+    return {"question": question, "options": options[:4]}
+
+
+# ============================================================
+# БРЕНДИНГ КАРТИНОК
+# ============================================================
+
 def _add_branding(image_path: str, channel_key: str = "cyber"):
-    """Добавляет брендированную плашку с названием канала в правом нижнем углу."""
     try:
         img = Image.open(image_path).convert("RGB")
         w, h = img.size
@@ -242,30 +395,28 @@ def _add_branding(image_path: str, channel_key: str = "cyber"):
 
         tx = x1 + (logo_w - tw) // 2
         ty = y1 + (logo_h - th) // 2 - int(logo_h * 0.1)
-
         draw.text((tx, ty), text, font=font, fill=text_color)
 
         img.save(image_path, "PNG")
-        print(f"   🏷️ Плашка: {text}")
         return True
     except Exception as e:
         print(f"   ⚠️ Ошибка плашки: {e}")
         return False
 
 
-async def generate_image(topic: str, channel_key: str = "cyber") -> str:
-    """Генерирует УНИКАЛЬНУЮ картинку с рандомизацией стиля."""
-    style = IMAGE_STYLES.get(channel_key, IMAGE_STYLES["cyber"])
+# ============================================================
+# ГЕНЕРАЦИЯ КАРТИНКИ
+# ============================================================
 
+async def generate_image(topic: str, channel_key: str = "cyber") -> str:
+    style = IMAGE_STYLES.get(channel_key, IMAGE_STYLES["cyber"])
     subject = random.choice(style["subjects"])
     composition = random.choice(style["compositions"])
     mood = random.choice(style["moods"])
 
     image_prompt = (
         f"{style['base'].format(topic=topic)}. "
-        f"Subject: {subject}. "
-        f"Composition: {composition}. "
-        f"Mood: {mood}."
+        f"Subject: {subject}. Composition: {composition}. Mood: {mood}."
     )
 
     clean_prompt = urllib.parse.quote(image_prompt[:500])
