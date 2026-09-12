@@ -12,6 +12,7 @@ from config import (
 PROVOD_URL = "https://api.provod.ai/v1/chat/completions"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
+# === Модели OpenRouter (бесплатные) ===
 OPENROUTER_MODELS = [
     "meta-llama/llama-3.3-70b-instruct:free",
     "openai/gpt-oss-20b:free",
@@ -135,7 +136,9 @@ async def _smart_call(prompt: str, temperature: float = 0.85):
     """Пробует provod.ai, потом OpenRouter."""
     # Пробуем provod.ai
     try:
-        return await _call_api(PROVOD_URL, PROVOD_API_KEY, GEMINI_MODEL, prompt, temperature)
+        result = await _call_api(PROVOD_URL, PROVOD_API_KEY, GEMINI_MODEL, prompt, temperature)
+        print("   ✅ Ответ от provod.ai")
+        return result
     except Exception as e:
         print(f"⚠️ Provod.ai: {e}, пробуем OpenRouter...")
 
@@ -143,10 +146,14 @@ async def _smart_call(prompt: str, temperature: float = 0.85):
     if OPENROUTER_API_KEY:
         for model in OPENROUTER_MODELS:
             try:
-                return await _call_api(OPENROUTER_URL, OPENROUTER_API_KEY, model, prompt, temperature)
+                result = await _call_api(OPENROUTER_URL, OPENROUTER_API_KEY, model, prompt, temperature)
+                print(f"   ✅ Ответ от OpenRouter ({model})")
+                return result
             except Exception as e:
                 print(f"⚠️ {model}: {e}")
                 continue
+    else:
+        print("⚠️ OPENROUTER_API_KEY не задан!")
 
     raise Exception("Все модели недоступны")
 
