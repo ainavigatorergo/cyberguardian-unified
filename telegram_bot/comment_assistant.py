@@ -9,6 +9,9 @@ from config import DATA_DIR, PROVOD_API_KEY, OPENROUTER_API_KEY
 
 ADMIN_FILE = os.path.join(DATA_DIR, "admin_chat.json")
 
+# === ЮЗЕРНЕЙМ АДМИНА (fallback, если chat_id не сохранён) ===
+ADMIN_USERNAME = "@kostaErgo"
+
 PROVOD_URL = "https://api.provod.ai/v1/chat/completions"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -18,18 +21,11 @@ OPENROUTER_MODELS = [
     "google/gemma-3-12b-it:free",
 ]
 
-# === ЧЁРНЫЙ СПИСОК КАНАЛОВ (не показывать в дайджесте) ===
+# === ЧЁРНЫЙ СПИСОК КАНАЛОВ ===
 BLACKLIST = [
-    "cisoclub",           # CISOCLUB - кибербезопасность и ИТ
-    "true_security",      # Telegram: Contact @true_security
-    "true_sec",           # дубль
-    "kiber_bez",          # КИБЕР БЕЗ...
-    "chatgpt_ru",         # ChatGPT - Ru
-    "gpt_chat_ru",        # дубль
-    "ai_startups",        # ai_startups
-    "claude_ru",          # claude_ru | Available for purchase
-    "gemini_ru",          # возможно тоже
-    "chatgpt_ru_official", # на всякий случай
+    "cisoclub", "true_security", "true_sec", "kiber_bez",
+    "chatgpt_ru", "gpt_chat_ru", "ai_startups", "claude_ru",
+    "gemini_ru", "chatgpt_ru_official",
 ]
 
 SEARCH_KEYWORDS = {
@@ -82,8 +78,12 @@ def _load_json(path, default):
 
 
 def _save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠️ Не удалось сохранить {path}: {e}")
 
 
 def save_admin_chat_id(chat_id: int):
@@ -97,7 +97,6 @@ def get_admin_chat_id():
 
 
 def is_blacklisted(channel):
-    """Проверяет, в чёрном ли списке канал."""
     return channel.lower() in [b.lower() for b in BLACKLIST]
 
 
@@ -216,10 +215,6 @@ async def generate_comment_variants(post_text, channel_key):
 
 
 async def discover_channels(channel_key, max_new=3):
-    """
-    Возвращает 3 случайных канала с открытыми комментариями.
-    Исключает чёрный список.
-    """
     candidates = list(SEED_CHANNELS.get(channel_key, []))
     random.shuffle(candidates)
 
@@ -233,7 +228,6 @@ async def discover_channels(channel_key, max_new=3):
             break
         checked += 1
 
-        # Пропускаем чёрный список
         if is_blacklisted(ch):
             continue
 
@@ -241,7 +235,6 @@ async def discover_channels(channel_key, max_new=3):
         if not info:
             continue
 
-        # Также проверяем по названию
         if is_blacklisted(info.get("title", "").lower()):
             continue
 
@@ -285,30 +278,36 @@ async def discover_channels(channel_key, max_new=3):
 
 
 async def send_daily_digest(bot):
-    admin_chat_id = get_admin_chat_id()
-    if not admin_chat_id:
-        print("⚠️ admin_chat_id не найден. Напиши боту /start")
-        return False
+    # === Определяем, куда отправлять ===
+    target = get_admin_chat_id()
+    if not target:
+        target = ADMIN_USERNAME
+        print(f"ℹ️ chat_id не найден, используем юзернейм: {ADMIN_USERNAME}")
 
     try:
         await bot.send_message(
-            admin_chat_id,
+            target,
             "🔔 <b>Дайджест для комментирования</b>\n"
             f"📅 {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
             "🔍 Ищу каналы с открытыми комментариями..."
         )
-    except:
-        pass
+    except Exception as e:
+        print(f"⚠️ Не удалось отправить первое сообщение: {e}")
+        return False
 
     for channel_key in ["cyber", "ai"]:
         emoji = "🔐" if channel_key == "cyber" else "🤖"
         name = "CyberGuardianSec" if channel_key == "cyber" else "AI Navigator"
 
-        channels = await discover_channels(channel_key, max_new=3)
+        try:
+            channels = await discover_channels(channel_key, max_new=3)
+        except Exception as e:
+            print(f"⚠️ Ошибка поиска каналов: {e}")
+            channels = []
 
         if not channels:
             try:
-                await bot.send_message(admin_chat_id, f"{emoji} <b>{name}</b>\n\nКаналы не найдены.")
+                await bot.send_message(target, f"{emoji} <b>{name}</b>\n\nКаналы не найдены.")
             except:
                 pass
             continue
@@ -321,7 +320,11 @@ async def send_daily_digest(bot):
                 header += "⚠️ Комментарии могут быть закрыты\n"
             header += f"\n📄 <i>Последний пост:</i>\n{ch['last_post'][:250]}\n"
 
-            variants = await generate_comment_variants(ch['last_post'], channel_key)
+            try:
+                variants = await generate_comment_variants(ch['last_post'], channel_key)
+            except Exception as e:
+                print(f"⚠️ Ошибка генерации вариантов: {e}")
+                variants = []
 
             if variants:
                 header += "\n💬 <b>Варианты комментариев:</b>\n\n"
@@ -338,13 +341,13 @@ async def send_daily_digest(bot):
             )
 
             try:
-                await bot.send_message(admin_chat_id, header, disable_web_page_preview=True)
+                await bot.send_message(target, header, disable_web_page_preview=True)
                 await asyncio.sleep(1)
             except Exception as e:
                 print(f"⚠️ Ошибка отправки: {e}")
 
     try:
-        await bot.send_message(admin_chat_id, "✅ Дайджест завершён")
+        await bot.send_message(target, "✅ Дайджест завершён")
     except:
         pass
 
