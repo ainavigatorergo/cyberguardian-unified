@@ -11,6 +11,7 @@ from generator import (
     generate_ideas
 )
 from analytics import collect_daily_stats, send_weekly_report, increment_post_count
+from api_monitor import check_all_apis
 
 scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 
@@ -103,6 +104,7 @@ async def publish_rubric_post(bot, channel_key: str):
 
 
 def start_scheduler(bot):
+    # Публикации
     scheduler.add_job(publish_rubric_post, "cron", hour=10, minute=0,
                       args=[bot, "cyber"], id="cyber_morning")
     scheduler.add_job(publish_rubric_post, "cron", hour=19, minute=0,
@@ -120,9 +122,14 @@ def start_scheduler(bot):
     scheduler.add_job(send_weekly_report, "cron", day_of_week="sun", hour=20, minute=0,
                       args=[bot], id="weekly_report")
 
+    # Мониторинг API каждые 60 минут
+    scheduler.add_job(check_all_apis, "interval", hours=1,
+                      args=[bot], id="api_monitor")
+
     scheduler.start()
     print("✅ Планировщик запущен")
     print("   cyber: 10/19 МСК")
     print("   ai: 11/20 МСК")
     print("   статистика: 23:00 МСК")
     print("   отчёт: воскресенье 20:00 МСК")
+    print("   мониторинг API: каждый час")
