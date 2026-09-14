@@ -12,15 +12,11 @@ from config import (
 PROVOD_URL = "https://api.provod.ai/v1/chat/completions"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# === Модели provod.ai (пробуем все по очереди) ===
+# === Модели provod.ai (перебор по очереди) ===
 PROVOD_MODELS = [
-    "gemini-3.5-flash",
-    "google/gemini-3.5-flash",
-    "gemini-3.5-flash-preview",
-    "gemini-2.5-flash",
-    "google/gemini-2.5-flash",
-    "gemini-3.1-flash",
-    "gemini-3.1-pro-preview",
+    "gemini-3.5-flash",        # основная
+    "gemini-2.5-flash",        # резерв
+    "gemini-flash-latest",     # авто-подтягивает свежую версию
 ]
 
 # === Модели OpenRouter (бесплатные) ===
@@ -126,7 +122,7 @@ def save_used_topics(data):
 # API-ЗАПРОСЫ
 # ============================================================
 
-async def _call_api(url: str, api_key: str, model: str, prompt: str, temperature: float = 0.85):
+async def _call_api(url, api_key, model, prompt, temperature=0.85):
     async with aiohttp.ClientSession() as session:
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -145,22 +141,19 @@ async def _call_api(url: str, api_key: str, model: str, prompt: str, temperature
             raise Exception(f"API error: {resp.status} - {error_text[:150]}")
 
 
-async def _smart_call(prompt: str, temperature: float = 0.85):
+async def _smart_call(prompt, temperature=0.85):
     """Пробует provod.ai (все модели), потом OpenRouter."""
-    # === Пробуем provod.ai — перебираем все модели ===
     for model in PROVOD_MODELS:
         try:
             result = await _call_api(PROVOD_URL, PROVOD_API_KEY, model, prompt, temperature)
             print(f"   ✅ Ответ от provod.ai ({model})")
             return result
         except Exception as e:
-            error_short = str(e)[:120]
-            print(f"   ⚠️ provod.ai [{model}]: {error_short}")
+            print(f"   ⚠️ provod [{model}]: {str(e)[:100]}")
             continue
 
     print("⚠️ Все модели provod.ai не сработали, пробуем OpenRouter...")
 
-    # === Пробуем OpenRouter ===
     if OPENROUTER_API_KEY:
         for model in OPENROUTER_MODELS:
             try:
@@ -168,8 +161,7 @@ async def _smart_call(prompt: str, temperature: float = 0.85):
                 print(f"   ✅ Ответ от OpenRouter ({model})")
                 return result
             except Exception as e:
-                error_short = str(e)[:120]
-                print(f"   ⚠️ OpenRouter [{model}]: {error_short}")
+                print(f"   ⚠️ OR [{model}]: {str(e)[:100]}")
                 continue
     else:
         print("⚠️ OPENROUTER_API_KEY не задан!")
@@ -181,7 +173,7 @@ async def _smart_call(prompt: str, temperature: float = 0.85):
 # ПРОВЕРКА УНИКАЛЬНОСТИ ТЕМ
 # ============================================================
 
-async def is_topic_unique(topic: str, channel_key: str) -> bool:
+async def is_topic_unique(topic, channel_key):
     used = load_used_topics().get(channel_key, [])
     if not used:
         return True
@@ -217,7 +209,7 @@ async def is_topic_unique(topic: str, channel_key: str) -> bool:
 # ГЕНЕРАЦИЯ ИДЕЙ
 # ============================================================
 
-async def generate_ideas(channel_key: str, count: int = 5) -> list:
+async def generate_ideas(channel_key, count=5):
     profile = CHANNELS[channel_key]
     used = load_used_topics().get(channel_key, [])
     used_str = ", ".join(used[-20:]) if used else "пока ничего"
@@ -251,7 +243,7 @@ async def generate_ideas(channel_key: str, count: int = 5) -> list:
 # ГЕНЕРАЦИЯ ПОСТА
 # ============================================================
 
-async def generate_post(topic: str, channel_key: str, rubric: dict = None) -> str:
+async def generate_post(topic, channel_key, rubric=None):
     profile = CHANNELS[channel_key]
 
     if channel_key == "cyber":
@@ -292,7 +284,7 @@ async def generate_post(topic: str, channel_key: str, rubric: dict = None) -> st
 # ГЕНЕРАЦИЯ ЛОНГРИДА
 # ============================================================
 
-async def generate_longread(topic: str, channel_key: str, rubric: dict = None) -> str:
+async def generate_longread(topic, channel_key, rubric=None):
     profile = CHANNELS[channel_key]
 
     rubric_block = ""
@@ -323,7 +315,7 @@ async def generate_longread(topic: str, channel_key: str, rubric: dict = None) -
 # ГЕНЕРАЦИЯ ОПРОСА
 # ============================================================
 
-async def generate_poll(topic: str, channel_key: str) -> dict:
+async def generate_poll(topic, channel_key):
     profile = CHANNELS[channel_key]
 
     prompt = f"""
@@ -367,7 +359,7 @@ async def generate_poll(topic: str, channel_key: str) -> dict:
 # БРЕНДИНГ КАРТИНОК
 # ============================================================
 
-def _add_branding(image_path: str, channel_key: str = "cyber"):
+def _add_branding(image_path, channel_key="cyber"):
     try:
         img = Image.open(image_path).convert("RGB")
         w, h = img.size
@@ -428,7 +420,7 @@ def _add_branding(image_path: str, channel_key: str = "cyber"):
 # ГЕНЕРАЦИЯ КАРТИНКИ
 # ============================================================
 
-async def generate_image(topic: str, channel_key: str = "cyber") -> str:
+async def generate_image(topic, channel_key="cyber"):
     style = IMAGE_STYLES.get(channel_key, IMAGE_STYLES["cyber"])
     subject = random.choice(style["subjects"])
     composition = random.choice(style["compositions"])
