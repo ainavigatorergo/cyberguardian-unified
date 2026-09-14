@@ -39,12 +39,15 @@ BLACKLIST = [
     "syoloshchnaya",
     "ai_for_business",
     "data_security_ru",
-    "itsec_news",           # ITsec NEWS — без комментариев
-    "gpt4_ru",              # GPT4_RU — без комментариев
-    "ai_daily",             # ai_daily — пустые посты
+    "itsec_news",
+    "gpt4_ru",
+    "ai_daily",
+    "machinelearning",       # добавлено
+    "machinelearning_ru",    # добавлено
+    "machine_learning_news", # добавлено
 ]
 
-# === СЛУЖЕБНЫЕ ФРАЗЫ (если пост содержит — пропускаем) ===
+# === СЛУЖЕБНЫЕ ФРАЗЫ ===
 SERVICE_PHRASES = [
     "channel created",
     "channel name was changed",
@@ -88,7 +91,7 @@ SEED_CHANNELS = {
     "ai": [
         "ai_news_ru", "neural_networks", "gpt_ru", "ai_art_ru",
         "openai_ru", "data_secrets", "aiconference", "neuro_ru",
-        "midjourney_ru", "dl_ru", "ai_daily_free",
+        "midjourney_ru", "dl_ru",
         "deep_learning_ru", "prompt_engineering", "neuro_channel",
         "ai_machinelearning_big_data", "ai_discussions", "llm_ru",
         "ai_tools_ru", "neuro_news", "ai_practice", "gpt_news_ru",
@@ -144,14 +147,12 @@ def is_title_blacklisted(title: str) -> bool:
 
 
 def is_service_post(text: str) -> bool:
-    """Проверяет, является ли пост служебным (не контентом)."""
     if not text:
         return True
     text_lower = text.lower().strip()
     for phrase in SERVICE_PHRASES:
         if phrase in text_lower:
             return True
-    # Пост из 1–3 слов, короткий — почти наверняка служебный
     if len(text_lower) < 60:
         return True
     return False
@@ -207,7 +208,6 @@ async def _check_channel_web_preview(channel):
         desc_match = re.search(r'<meta property="og:description" content="([^"]+)"', html)
         description = desc_match.group(1) if desc_match else ""
 
-        # Парсим все посты и ищем последний ОСМЫСЛЕННЫЙ (не служебный)
         posts = re.findall(r'<div class="tgme_widget_message_text[^>]*>(.*?)</div>', html, re.DOTALL)
         last_post = ""
         for post_html in reversed(posts):
@@ -301,7 +301,6 @@ async def discover_channels(channel_key, max_new=3):
             print(f"   🚫 {ch} — название в чёрном списке")
             continue
 
-        # Пропускаем каналы без осмысленного поста
         if not info.get("last_post"):
             print(f"   ⏭️ {ch} — нет осмысленного поста")
             continue
@@ -384,7 +383,7 @@ async def send_daily_digest(bot):
                 print(f"⚠️ Ошибка отправки: {e}")
 
     try:
-        await bot.send_message(target, "✅ Дайджест завершён")
+                await bot.send_message(target, "✅ Дайджест завершён")
     except:
         pass
 
