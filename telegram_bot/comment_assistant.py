@@ -38,6 +38,25 @@ BLACKLIST = [
     "seeallochnaya",
     "syoloshchnaya",
     "ai_for_business",
+    "data_security_ru",
+    "itsec_news",           # ITsec NEWS — без комментариев
+    "gpt4_ru",              # GPT4_RU — без комментариев
+    "ai_daily",             # ai_daily — пустые посты
+]
+
+# === СЛУЖЕБНЫЕ ФРАЗЫ (если пост содержит — пропускаем) ===
+SERVICE_PHRASES = [
+    "channel created",
+    "channel name was changed",
+    "channel photo changed",
+    "channel description changed",
+    "channel pinned",
+    "channel is available for purchase",
+    "available for purchase",
+    "канал создан",
+    "название канала изменено",
+    "описание канала изменено",
+    "канал доступен для покупки",
 ]
 
 SEARCH_KEYWORDS = {
@@ -61,15 +80,15 @@ SEED_CHANNELS = {
         "anti_malware", "cnews_ru", "sec_ru", "bugbounty_ru",
         "pentestit", "in4security", "aciso_ru", "itsec_ru",
         "safe_zone_ru", "cyberpolice_ru", "antiphishing_ru",
-        "data_security_ru", "cyber_news_ru", "security_week",
-        "infosec_ru", "itsec_news", "cyber_security_news", "hack_news",
+        "cyber_news_ru", "security_week", "infosec_ru",
+        "cyber_security_news", "hack_news",
         "kaspersky", "securitylab", "hacker_news_ru",
         "cyber_ru", "security_news_ru", "infosecurity",
     ],
     "ai": [
         "ai_news_ru", "neural_networks", "gpt_ru", "ai_art_ru",
         "openai_ru", "data_secrets", "aiconference", "neuro_ru",
-        "midjourney_ru", "dl_ru", "gpt4_ru", "ai_daily",
+        "midjourney_ru", "dl_ru", "ai_daily_free",
         "deep_learning_ru", "prompt_engineering", "neuro_channel",
         "ai_machinelearning_big_data", "ai_discussions", "llm_ru",
         "ai_tools_ru", "neuro_news", "ai_practice", "gpt_news_ru",
@@ -111,20 +130,31 @@ def get_admin_chat_id():
 
 
 def _normalize(s: str) -> str:
-    """Очищает строку: убирает @, пробелы, приводит к нижнему регистру."""
     return s.lower().strip().lstrip("@").strip()
 
 
 def is_blacklisted(channel: str) -> bool:
-    """Проверяет ТОЛЬКО точное совпадение юзернейма с чёрным списком."""
     ch = _normalize(channel)
     return ch in [_normalize(b) for b in BLACKLIST]
 
 
 def is_title_blacklisted(title: str) -> bool:
-    """Проверяет точное совпадение названия канала с чёрным списком."""
     t = _normalize(title)
     return t in [_normalize(b) for b in BLACKLIST]
+
+
+def is_service_post(text: str) -> bool:
+    """Проверяет, является ли пост служебным (не контентом)."""
+    if not text:
+        return True
+    text_lower = text.lower().strip()
+    for phrase in SERVICE_PHRASES:
+        if phrase in text_lower:
+            return True
+    # Пост из 1–3 слов, короткий — почти наверняка служебный
+    if len(text_lower) < 60:
+        return True
+    return False
 
 
 async def _call_api(url, api_key, model, prompt, temperature=0.7):
@@ -177,11 +207,17 @@ async def _check_channel_web_preview(channel):
         desc_match = re.search(r'<meta property="og:description" content="([^"]+)"', html)
         description = desc_match.group(1) if desc_match else ""
 
+        # Парсим все посты и ищем последний ОСМЫСЛЕННЫЙ (не служебный)
         posts = re.findall(r'<div class="tgme_widget_message_text[^>]*>(.*?)</div>', html, re.DOTALL)
         last_post = ""
-        if posts:
-            last_post = re.sub(r'<[^>]+>', '', posts[-1])
-            last_post = last_post[:400].replace("\n", " ")
+        for post_html in reversed(posts):
+            cleaned = re.sub(r'<br\s*/?>', ' ', post_html)
+            cleaned = re.sub(r'<[^>]+>', '', cleaned)
+            cleaned = cleaned.replace("&nbsp;", " ").replace("&amp;", "&")
+            cleaned = cleaned.strip()
+            if not is_service_post(cleaned):
+                last_post = cleaned[:400].replace("\n", " ")
+                break
 
         return {
             "title": title,
@@ -211,11 +247,12 @@ async def generate_comment_variants(post_text, channel_key):
 Вот пост в чужом канале:
 "{post_text[:500]}"
 
-Напиши ТРИ разных варианта комментария к этому посту.
+Напиши ТРИ разных варианта комментария ИМЕННО К ЭТОМУ ПОСТУ.
 
 Требования:
 - 2–3 предложения каждый.
 - Экспертный, полезный, по делу.
+- Ссылайся на конкретику из поста.
 - Без ссылок на свой канал.
 - Варианты РАЗНЫЕ по подходу.
 
@@ -248,11 +285,10 @@ async def discover_channels(channel_key, max_new=3):
     for ch in candidates:
         if len(new_channels) >= max_new:
             break
-        if checked >= 15:
+        if checked >= 25:
             break
         checked += 1
 
-        # Точная проверка юзернейма
         if is_blacklisted(ch):
             print(f"   🚫 {ch} — в чёрном списке")
             continue
@@ -261,9 +297,13 @@ async def discover_channels(channel_key, max_new=3):
         if not info:
             continue
 
-        # Точная проверка названия
         if is_title_blacklisted(info.get("title", "")):
             print(f"   🚫 {ch} — название в чёрном списке")
+            continue
+
+        # Пропускаем каналы без осмысленного поста
+        if not info.get("last_post"):
+            print(f"   ⏭️ {ch} — нет осмысленного поста")
             continue
 
         combined = f"{info['title']} {info['description']} {info['last_post']}"
