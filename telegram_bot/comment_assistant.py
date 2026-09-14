@@ -9,7 +9,6 @@ from config import DATA_DIR, PROVOD_API_KEY, OPENROUTER_API_KEY
 
 ADMIN_FILE = os.path.join(DATA_DIR, "admin_chat.json")
 
-# === ТВОЙ CHAT_ID (дефолтный, чтобы дайджест работал всегда) ===
 DEFAULT_ADMIN_CHAT_ID = 5053770400
 
 PROVOD_URL = "https://api.provod.ai/v1/chat/completions"
@@ -21,47 +20,63 @@ OPENROUTER_MODELS = [
     "google/gemma-3-12b-it:free",
 ]
 
+# === ЧЁРНЫЙ СПИСОК (без комментов / не существуют / похожи на мои) ===
 BLACKLIST = [
-    "cisoclub", "true_security", "true_sec", "kiber_bez",
-    "chatgpt_ru", "gpt_chat_ru", "ai_startups", "claude_ru",
-    "gemini_ru", "chatgpt_ru_official",
+    # Без комментариев
+    "cisoclub",
+    "true_security",
+    "true_sec",
+    "infosec",                      # без комментов
+    "kiber_bez",                    # КИБЕР БЕЗ...
+    "chatgpt_ru",                   # ChatGPT - Ru
+    "gpt_chat_ru",
+    "ai_startups",
+    "claude_ru",
+    "gemini_ru",
+    "chatgpt_ru_official",
+    "security_alert",               # не существует
+    "cybersecurity_ru",             # похож на мой канал
+    "seeallochnaya",                # только с личного аккаунта
+    "syoloshchnaya",
+    "ai_for_business",              # AI-для бизнеса | Внедрение, без комментов
+    "машинное_обучение",            # дубль по названию
+    "machinelearning_ru",           # без комментов
 ]
 
 SEARCH_KEYWORDS = {
     "cyber": [
-        "кибербезопасность", "cybersecurity", "инфобез", "infosec",
+        "кибербезопасность", "cybersecurity", "инфобез",
         "хакеры", "hacking", "утечки", "data breach", "уязвимость",
         "защита данных", "приватность", "VPN", "пароли", "фишинг",
         "безопасность", "security", "malware", "атака",
     ],
     "ai": [
         "нейросети", "нейросеть", "AI", "artificial intelligence", "ChatGPT",
-        "машинное обучение", "machine learning", "AI для бизнеса",
+        "машинное обучение", "AI для бизнеса",
         "автоматизация", "промпты", "Midjourney", "GPT", "LLM",
         "искусственный интеллект", "нейронные сети", "OpenAI",
     ],
 }
 
+# === КАНАЛЫ ДЛЯ ПОИСКА (только активные, с открытыми комментами) ===
 SEED_CHANNELS = {
     "cyber": [
-        "cybersecurity_ru", "infosecurity", "securitylab", "kaspersky",
         "positive_technologies", "bizone_ru", "codeby_ru", "xakep_ru",
         "anti_malware", "cnews_ru", "sec_ru", "bugbounty_ru",
         "pentestit", "security_moscow", "in4security", "aciso_ru",
         "itsec_ru", "safe_zone_ru", "cyberpolice_ru", "antiphishing_ru",
         "data_security_ru", "cyber_news_ru", "security_week",
-        "infosec_ru", "itsec_news", "security_alert",
-        "cyber_security_news", "hack_news", "infosec_channel",
+        "infosec_ru", "itsec_news", "cyber_security_news", "hack_news",
+        "kaspersky", "securitylab",
     ],
     "ai": [
         "ai_news_ru", "neural_networks", "gpt_ru", "ai_art_ru",
         "openai_ru", "data_secrets", "aiconference", "neuro_ru",
-        "ai_for_business", "midjourney_ru", "seeallochnaya", "dl_ru",
-        "gpt4_ru", "ai_daily", "machinelearning_ru", "deep_learning_ru",
-        "prompt_engineering", "neuro_channel", "ai_machinelearning_big_data",
-        "ai_discussions", "llm_ru", "ai_tools_ru", "neuro_news",
-        "ai_practice", "gpt_news_ru", "ai_technologies", "neural_networks_ru",
-        "ai_business_ru", "machine_learning_news",
+        "midjourney_ru", "dl_ru", "gpt4_ru", "ai_daily",
+        "deep_learning_ru", "prompt_engineering", "neuro_channel",
+        "ai_machinelearning_big_data", "ai_discussions", "llm_ru",
+        "ai_tools_ru", "neuro_news", "ai_practice", "gpt_news_ru",
+        "ai_technologies", "neural_networks_ru", "machine_learning_news",
     ],
 }
 
@@ -95,12 +110,15 @@ def get_admin_chat_id():
     saved = data.get("chat_id")
     if saved:
         return saved
-    # Fallback на дефолтный
     return DEFAULT_ADMIN_CHAT_ID
 
 
 def is_blacklisted(channel):
-    return channel.lower() in [b.lower() for b in BLACKLIST]
+    ch_lower = channel.lower()
+    for b in BLACKLIST:
+        if b.lower() in ch_lower or ch_lower in b.lower():
+            return True
+    return False
 
 
 async def _call_api(url, api_key, model, prompt, temperature=0.7):
@@ -153,7 +171,8 @@ async def _check_channel_web_preview(channel):
         desc_match = re.search(r'<meta property="og:description" content="([^"]+)"', html)
         description = desc_match.group(1) if desc_match else ""
 
-        has_comments = "tgme_widget_message_replies" in html or "comments" in html.lower()
+        # Проверка наличия группы обсуждений
+        has_comments = "tgme_widget_message_replies" in html
 
         posts = re.findall(r'<div class="tgme_widget_message_text[^>]*>(.*?)</div>', html, re.DOTALL)
         last_post = ""
@@ -218,16 +237,20 @@ async def generate_comment_variants(post_text, channel_key):
 
 
 async def discover_channels(channel_key, max_new=3):
+    """
+    Возвращает только каналы с ОТКРЫТЫМИ комментариями.
+    """
     candidates = list(SEED_CHANNELS.get(channel_key, []))
     random.shuffle(candidates)
 
     new_channels = []
     checked = 0
 
+    # Первый проход — только с открытыми комментами
     for ch in candidates:
         if len(new_channels) >= max_new:
             break
-        if checked >= 20:
+        if checked >= 25:
             break
         checked += 1
 
@@ -238,44 +261,23 @@ async def discover_channels(channel_key, max_new=3):
         if not info:
             continue
 
-        if is_blacklisted(info.get("title", "").lower()):
+        if is_blacklisted(info.get("title", "")):
+            continue
+
+        # ТОЛЬКО с открытыми комментами
+        if not info.get("has_comments"):
+            print(f"   ⏭️ {ch} — комментарии закрыты")
             continue
 
         combined = f"{info['title']} {info['description']} {info['last_post']}"
         if _matches_keywords(combined, channel_key):
-            if info.get("has_comments"):
-                new_channels.append({
-                    "channel": ch,
-                    "title": info["title"],
-                    "last_post": info["last_post"][:250],
-                    "url": info["url"],
-                    "has_comments": True,
-                })
-
-    if len(new_channels) < max_new:
-        for ch in candidates:
-            if len(new_channels) >= max_new:
-                break
-            if any(c["channel"] == ch for c in new_channels):
-                continue
-            if is_blacklisted(ch):
-                continue
-
-            info = await _check_channel_web_preview(ch)
-            if not info:
-                continue
-            if is_blacklisted(info.get("title", "").lower()):
-                continue
-
-            combined = f"{info['title']} {info['description']} {info['last_post']}"
-            if _matches_keywords(combined, channel_key):
-                new_channels.append({
-                    "channel": ch,
-                    "title": info["title"],
-                    "last_post": info["last_post"][:250],
-                    "url": info["url"],
-                    "has_comments": info.get("has_comments", False),
-                })
+            new_channels.append({
+                "channel": ch,
+                "title": info["title"],
+                "last_post": info["last_post"][:250],
+                "url": info["url"],
+                "has_comments": True,
+            })
 
     return new_channels
 
@@ -289,7 +291,7 @@ async def send_daily_digest(bot):
             target,
             "🔔 <b>Дайджест для комментирования</b>\n"
             f"📅 {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
-            "🔍 Ищу каналы с открытыми комментариями..."
+            "🔍 Ищу каналы только с ОТКРЫТЫМИ комментариями..."
         )
     except Exception as e:
         print(f"❌ Не удалось отправить первое сообщение: {e}")
@@ -307,17 +309,19 @@ async def send_daily_digest(bot):
 
         if not channels:
             try:
-                await bot.send_message(target, f"{emoji} <b>{name}</b>\n\nКаналы не найдены.")
+                await bot.send_message(
+                    target,
+                    f"{emoji} <b>{name}</b>\n\n"
+                    "😔 Каналов с открытыми комментариями не найдено.\n"
+                    "<i>Попробуй позже или добавь каналы в белый список.</i>"
+                )
             except:
                 pass
             continue
 
         for ch in channels:
             header = f"{emoji} <b>{name}</b> → <a href=\"{ch['url']}\">{ch['title']}</a>\n"
-            if ch.get("has_comments"):
-                header += "✅ Комментарии открыты\n"
-            else:
-                header += "⚠️ Комментарии могут быть закрыты\n"
+            header += "✅ Комментарии открыты\n"
             header += f"\n📄 <i>Последний пост:</i>\n{ch['last_post'][:250]}\n"
 
             try:
