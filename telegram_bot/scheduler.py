@@ -10,27 +10,24 @@ from generator import (
     generate_poll, is_topic_unique, load_used_topics, save_used_topics,
     generate_ideas
 )
+from analytics import collect_daily_stats, send_weekly_report, increment_post_count
 
 scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 
 
 async def publish_rubric_post(bot, channel_key: str):
-    """Публикует пост по рубрике дня."""
     profile = CHANNELS[channel_key]
     emoji = "🔐" if channel_key == "cyber" else "🤖"
 
-    # Определяем рубрику по дню недели (0=Пн, 6=Вс)
     weekday = datetime.now().weekday()
     rubric = RUBRICS.get(weekday, RUBRICS[6])
 
     print(f"\n{emoji} === Публикация: {channel_key} | Рубрика: {rubric['name']} ===")
 
-    # Берём тему
     used_data = load_used_topics()
     used_list = used_data.get(channel_key, [])
     available_topics = [t for t in profile["topics"] if t not in used_list]
 
-    # Если темы закончились — генерируем новые через AI
     if not available_topics:
         print(f"⚠️ Темы закончились, генерирую новые через AI...")
         try:
@@ -39,13 +36,10 @@ async def publish_rubric_post(bot, channel_key: str):
             print(f"✅ Получено {len(new_ideas)} новых тем")
         except Exception as e:
             print(f"❌ Не удалось получить новые темы: {e}")
-            # Сбрасываем использованные, чтобы начать заново
             used_data[channel_key] = []
             save_used_topics(used_data)
             available_topics = profile["topics"]
-            print(f"🔄 Сбросил историю тем, начинаем заново")
 
-    # Проверяем уникальность
     topic = None
     for candidate in available_topics[:5]:
         if await is_topic_unique(candidate, channel_key):
@@ -53,7 +47,7 @@ async def publish_rubric_post(bot, channel_key: str):
             break
 
     if not topic:
-        topic = available_topics[0]  # fallback
+        topic = available_topics[0]
 
     print(f"📝 Тема: {topic}")
 
@@ -61,7 +55,6 @@ async def publish_rubric_post(bot, channel_key: str):
         fmt = rubric.get("format", "post")
 
         if fmt == "poll":
-            # === ОПРОС ===
             print("🗳️ Генерирую опрос...")
             poll_data = await generate_poll(topic, channel_key)
             await bot.send_poll(
@@ -71,18 +64,18 @@ async def publish_rubric_post(bot, channel_key: str):
                 is_anonymous=True,
             )
             print(f"🎉 Опрос опубликован")
+            increment_post_count()
 
         elif fmt == "longread":
-            # === ЛОНГРИД ===
             print("📖 Генерирую лонгрид...")
             post_text = await generate_longread(topic, channel_key, rubric)
             if len(post_text) > 4096:
                 post_text = post_text[:4090] + "..."
             await bot.send_message(profile["telegram_channel"], post_text)
-            print(f"🎉 Лонгрид опубликован ({len(post_text)} символов)")
+            print(f"🎉 Лонгрид опубликован")
+            increment_post_count()
 
         else:
-            # === ОБЫЧНЫЙ ПОСТ С ФОТО ===
             print("⏳ Генерирую текст...")
             post_text = await generate_post(topic, channel_key, rubric)
             print(f"✅ Текст готов ({len(post_text)} символов)")
@@ -99,8 +92,8 @@ async def publish_rubric_post(bot, channel_key: str):
                 photo = FSInputFile(image_path)
                 await bot.send_photo(profile["telegram_channel"], photo, caption=post_text)
             print(f"🎉 Пост опубликован")
+            increment_post_count()
 
-        # Записываем тему в использованные
         used_data = load_used_topics()
         used_data.setdefault(channel_key, []).append(topic)
         save_used_topics(used_data)
@@ -119,5 +112,17 @@ def start_scheduler(bot):
     scheduler.add_job(publish_rubric_post, "cron", hour=20, minute=0,
                       args=[bot, "ai"], id="ai_evening")
 
+    # Ежедневный сбор статистики в 23:00
+    scheduler.add_job(collect_daily_stats, "cron", hour=23, minute=0,
+                      args=[bot], id="daily_stats")
+
+    # Еженедельный отчёт — воскресенье в 20:00
+    scheduler.add_job(send_weekly_report, "cron", day_of_week="sun", hour=20, minute=0,
+                      args=[bot], id="weekly_report")
+
     scheduler.start()
-    print("✅ Планировщик запущен: cyber 10/19, ai 11/20 МСК")
+    print("✅ Планировщик запущен")
+    print("   cyber: 10/19 МСК")
+    print("   ai: 11/20 МСК")
+    print("   статистика: 23:00 МСК")
+    print("   отчёт: воскресенье 20:00 МСК")
