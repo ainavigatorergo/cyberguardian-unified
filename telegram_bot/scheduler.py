@@ -12,6 +12,7 @@ from generator import (
 )
 from analytics import collect_daily_stats, send_weekly_report, increment_post_count
 from api_monitor import check_all_apis
+from vk_publisher import publish_to_vk
 
 scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 
@@ -54,8 +55,11 @@ async def publish_rubric_post(bot, channel_key: str):
 
     try:
         fmt = rubric.get("format", "post")
+        post_text = ""
+        image_path = None
 
         if fmt == "poll":
+            # ОПРОС — только Telegram
             print("🗳️ Генерирую опрос...")
             poll_data = await generate_poll(topic, channel_key)
             await bot.send_poll(
@@ -64,19 +68,24 @@ async def publish_rubric_post(bot, channel_key: str):
                 options=poll_data["options"],
                 is_anonymous=True,
             )
-            print(f"🎉 Опрос опубликован")
+            print(f"🎉 Опрос опубликован в Telegram")
             increment_post_count()
 
         elif fmt == "longread":
+            # ЛОНГРИД — Telegram + VK
             print("📖 Генерирую лонгрид...")
             post_text = await generate_longread(topic, channel_key, rubric)
             if len(post_text) > 4096:
                 post_text = post_text[:4090] + "..."
             await bot.send_message(profile["telegram_channel"], post_text)
-            print(f"🎉 Лонгрид опубликован")
+            print(f"🎉 Лонгрид опубликован в Telegram")
             increment_post_count()
 
+            # VK
+            await publish_to_vk(channel_key, post_text)
+
         else:
+            # ОБЫЧНЫЙ ПОСТ — Telegram + VK
             print("⏳ Генерирую текст...")
             post_text = await generate_post(topic, channel_key, rubric)
             print(f"✅ Текст готов ({len(post_text)} символов)")
@@ -84,16 +93,23 @@ async def publish_rubric_post(bot, channel_key: str):
             print("🎨 Генерирую картинку...")
             image_path = await generate_image(topic, channel_key)
 
+            # Telegram
             if len(post_text) > 1024:
-                post_text = post_text[:1020] + "..."
+                tg_text = post_text[:1020] + "..."
+            else:
+                tg_text = post_text
 
             if image_path.startswith("http"):
-                await bot.send_photo(profile["telegram_channel"], image_path, caption=post_text)
+                await bot.send_photo(profile["telegram_channel"], image_path, caption=tg_text)
             else:
                 photo = FSInputFile(image_path)
-                await bot.send_photo(profile["telegram_channel"], photo, caption=post_text)
-            print(f"🎉 Пост опубликован")
+                await bot.send_photo(profile["telegram_channel"], photo, caption=tg_text)
+            print(f"🎉 Пост опубликован в Telegram")
             increment_post_count()
+
+            # VK
+            print("📤 Публикую в VK...")
+            await publish_to_vk(channel_key, post_text, image_path)
 
         used_data = load_used_topics()
         used_data.setdefault(channel_key, []).append(topic)
@@ -104,7 +120,6 @@ async def publish_rubric_post(bot, channel_key: str):
 
 
 def start_scheduler(bot):
-    # Публикации
     scheduler.add_job(publish_rubric_post, "cron", hour=10, minute=0,
                       args=[bot, "cyber"], id="cyber_morning")
     scheduler.add_job(publish_rubric_post, "cron", hour=19, minute=0,
@@ -114,22 +129,19 @@ def start_scheduler(bot):
     scheduler.add_job(publish_rubric_post, "cron", hour=20, minute=0,
                       args=[bot, "ai"], id="ai_evening")
 
-    # Ежедневный сбор статистики в 23:00
     scheduler.add_job(collect_daily_stats, "cron", hour=23, minute=0,
                       args=[bot], id="daily_stats")
 
-    # Еженедельный отчёт — воскресенье в 20:00
     scheduler.add_job(send_weekly_report, "cron", day_of_week="sun", hour=20, minute=0,
                       args=[bot], id="weekly_report")
 
-    # Мониторинг API каждые 60 минут
     scheduler.add_job(check_all_apis, "interval", hours=1,
                       args=[bot], id="api_monitor")
 
     scheduler.start()
     print("✅ Планировщик запущен")
-    print("   cyber: 10/19 МСК")
-    print("   ai: 11/20 МСК")
+    print("   cyber: 10/19 МСК (TG + VK)")
+    print("   ai: 11/20 МСК (TG + VK)")
     print("   статистика: 23:00 МСК")
     print("   отчёт: воскресенье 20:00 МСК")
     print("   мониторинг API: каждый час")
