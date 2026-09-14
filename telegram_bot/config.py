@@ -7,6 +7,17 @@ PROVOD_API_KEY = os.getenv("PROVOD_API_KEY", "sk_572d6f9c130ad10c5cfc7a6d48ab842
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "nsag1sPRpOnRupyvRMm6A5cZbZJgvuSfpX1DeFfFrOYksOq5XJMgpZSY")
 POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "sk_IO2JusirCuHRbVzBfZ6EEoDUkcjyRqU6")
 
+# === VK токены и ID групп ===
+VK_TOKENS = {
+    "cyber": os.getenv("VK_TOKEN_CYBER", "vk1.a.kPjS4OrhX2Vt5yMKw49l-p3l3bmE6uQoyPiDF4XpeTGstsUUNA3GY22YShf5evspiZGOddAtDCk5QSzCxFZc1UUfZxtdIl__Y5sYnZwJfZncsa8ybMmhf_eE-LWynH2mHhYh6RTD08P0FJpbIFcSlccQ3Mgs7-hyo-hUKHXDV2xOKezxEeXTwd8Lhv2tvyOhwEHWlQYJWAWw7YfQXL9Xpw"),
+    "ai": os.getenv("VK_TOKEN_AI", "vk1.a.5oc-ybsZqzZ7A0GZOL8ihsDvhbJxd_AGuADu44PWMD_AsdWLf_0962b6_GRt4PvqW9Jo39uwznFV67pNYTK81tUSNKTNN_nexsWcjmjQ3MVEEFJCV-cHHGtoYNfFWrKLtwzLJs7zKy0673K7w4Iakvfiad_r-zeN8kcEQdQJ5HMXwqnMaclebSu40HfTfygHbt9NJIZh7lQMpIw2FxBy1A"),
+}
+
+VK_GROUP_IDS = {
+    "cyber": int(os.getenv("VK_GROUP_CYBER", "241288592")),
+    "ai": int(os.getenv("VK_GROUP_AI", "241416521")),
+}
+
 # === Модель ===
 GEMINI_MODEL = "gemini-3.5-flash"
 
@@ -21,6 +32,7 @@ CHANNELS = {
     "cyber": {
         "name": "CyberGuardianSec",
         "telegram_channel": "@CyberGuardianSec",
+        "vk_group": "cyberguardiansec",
         "topics": [
             "фишинг", "утечки данных", "VPN", "пароли", "кибератаки",
             "социальная инженерия", "защита аккаунтов", "мошенничество",
@@ -42,6 +54,7 @@ CHANNELS = {
     "ai": {
         "name": "AI Navigator",
         "telegram_channel": "@ainavigatorErgo",
+        "vk_group": "ainavigatorpro",
         "topics": [
             "ChatGPT", "Midjourney", "нейросети для бизнеса",
             "автоматизация", "AI-инструменты", "промпты", "GPT-агенты",
@@ -80,64 +93,6 @@ RUBRICS = {
         "task": "Развенчай популярный миф. Объясни, почему это не так, и что на самом деле."},
     6: {"key": "free", "name": "🎯 Свободная тема", "format": "post",
         "task": "Выбери самую актуальную и интересную тему недели. Свободный формат."},
-}
-
-# === ВИКТОРИНЫ ===
-QUIZZES = {
-    "cyber": [
-        {
-            "q": "Что такое фишинг?",
-            "options": ["Способ ловли рыбы", "Мошенничество через поддельные сайты и письма", "Тип компьютерного вируса", "Программа для ускорения интернета"],
-            "correct": 1,
-        },
-        {
-            "q": "Какой пароль самый надёжный?",
-            "options": ["qwerty123", "Дата рождения", "Длинная фраза из 4+ слов", "Имя питомца"],
-            "correct": 2,
-        },
-        {
-            "q": "Что даёт двухфакторная аутентификация (2FA)?",
-            "options": ["Ускоряет вход", "Второй уровень защиты даже при утечке пароля", "Меняет пароль автоматически", "Блокирует вирусы"],
-            "correct": 1,
-        },
-        {
-            "q": "Что делать, если получил письмо от «банка» с просьбой перейти по ссылке?",
-            "options": ["Перейти и проверить", "Ответить на письмо", "Не переходить, зайти в банк через официальное приложение", "Переслать друзьям"],
-            "correct": 2,
-        },
-        {
-            "q": "Что такое VPN?",
-            "options": ["Вирус", "Виртуальная частная сеть для шифрования трафика", "Программа для монтажа видео", "Тип антивируса"],
-            "correct": 1,
-        },
-    ],
-    "ai": [
-        {
-            "q": "Что такое промпт?",
-            "options": ["Название нейросети", "Текстовый запрос к ИИ", "Тип файла", "Компьютерный вирус"],
-            "correct": 1,
-        },
-        {
-            "q": "Какая модель от OpenAI?",
-            "options": ["Midjourney", "GPT-4o", "Stable Diffusion", "Claude"],
-            "correct": 1,
-        },
-        {
-            "q": "Для чего лучше всего подходит Midjourney?",
-            "options": ["Для написания текстов", "Для генерации изображений", "Для программирования", "Для бухгалтерии"],
-            "correct": 1,
-        },
-        {
-            "q": "Что такое RAG в контексте ИИ?",
-            "options": ["Тип нейросети", "Поиск по базе знаний для улучшения ответов", "Формат файла", "Игровой движок"],
-            "correct": 1,
-        },
-        {
-            "q": "Какой ИИ-инструмент лучше всего для автоматизации бизнес-процессов?",
-            "options": ["ChatGPT Plus", "Midjourney", "DALL-E", "Stable Diffusion"],
-            "correct": 0,
-        },
-    ],
 }
 
 # === Расписание ===
