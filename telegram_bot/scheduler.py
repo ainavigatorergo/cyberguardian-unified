@@ -59,8 +59,7 @@ async def publish_rubric_post(bot, channel_key: str):
         image_path = None
 
         if fmt == "poll":
-            # ОПРОС — только Telegram
-            print("🗳️ Генерирую опрос...")
+            print("🗳️ Генерирую опрос (только Telegram)...")
             poll_data = await generate_poll(topic, channel_key)
             await bot.send_poll(
                 chat_id=profile["telegram_channel"],
@@ -72,7 +71,6 @@ async def publish_rubric_post(bot, channel_key: str):
             increment_post_count()
 
         elif fmt == "longread":
-            # ЛОНГРИД — Telegram + VK
             print("📖 Генерирую лонгрид...")
             post_text = await generate_longread(topic, channel_key, rubric)
             if len(post_text) > 4096:
@@ -81,11 +79,10 @@ async def publish_rubric_post(bot, channel_key: str):
             print(f"🎉 Лонгрид опубликован в Telegram")
             increment_post_count()
 
-            # VK
+            print("📤 Публикую в VK...")
             await publish_to_vk(channel_key, post_text)
 
         else:
-            # ОБЫЧНЫЙ ПОСТ — Telegram + VK
             print("⏳ Генерирую текст...")
             post_text = await generate_post(topic, channel_key, rubric)
             print(f"✅ Текст готов ({len(post_text)} символов)")
@@ -93,11 +90,7 @@ async def publish_rubric_post(bot, channel_key: str):
             print("🎨 Генерирую картинку...")
             image_path = await generate_image(topic, channel_key)
 
-            # Telegram
-            if len(post_text) > 1024:
-                tg_text = post_text[:1020] + "..."
-            else:
-                tg_text = post_text
+            tg_text = post_text[:1020] + "..." if len(post_text) > 1024 else post_text
 
             if image_path.startswith("http"):
                 await bot.send_photo(profile["telegram_channel"], image_path, caption=tg_text)
@@ -107,7 +100,6 @@ async def publish_rubric_post(bot, channel_key: str):
             print(f"🎉 Пост опубликован в Telegram")
             increment_post_count()
 
-            # VK
             print("📤 Публикую в VK...")
             await publish_to_vk(channel_key, post_text, image_path)
 
@@ -139,9 +131,4 @@ def start_scheduler(bot):
                       args=[bot], id="api_monitor")
 
     scheduler.start()
-    print("✅ Планировщик запущен")
-    print("   cyber: 10/19 МСК (TG + VK)")
-    print("   ai: 11/20 МСК (TG + VK)")
-    print("   статистика: 23:00 МСК")
-    print("   отчёт: воскресенье 20:00 МСК")
-    print("   мониторинг API: каждый час")
+    print("✅ Планировщик запущен: cyber 10/19, ai 11/20 МСК (TG + VK)")
