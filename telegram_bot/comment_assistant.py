@@ -20,13 +20,24 @@ OPENROUTER_MODELS = [
     "google/gemma-3-12b-it:free",
 ]
 
-# === ЧЁРНЫЙ СПИСОК ===
+# === ЧЁРНЫЙ СПИСОК (точное совпадение юзернейма) ===
 BLACKLIST = [
-    "cisoclub", "true_security", "true_sec", "kiber_bez",
-    "chatgpt_ru", "gpt_chat_ru", "ai_startups", "claude_ru",
-    "gemini_ru", "chatgpt_ru_official", "security_alert",
-    "cybersecurity_ru", "seeallochnaya", "syoloshchnaya",
-    "ai_for_business", "машинное_обучение",
+    "cisoclub",
+    "true_security",
+    "true_sec",
+    "infosec",
+    "kiber_bez",
+    "chatgpt_ru",
+    "gpt_chat_ru",
+    "ai_startups",
+    "claude_ru",
+    "gemini_ru",
+    "chatgpt_ru_official",
+    "security_alert",
+    "cybersecurity_ru",
+    "seeallochnaya",
+    "syoloshchnaya",
+    "ai_for_business",
 ]
 
 SEARCH_KEYWORDS = {
@@ -44,7 +55,6 @@ SEARCH_KEYWORDS = {
     ],
 }
 
-# === КАНАЛЫ ДЛЯ ПОИСКА ===
 SEED_CHANNELS = {
     "cyber": [
         "positive_technologies", "bizone_ru", "codeby_ru", "xakep_ru",
@@ -53,8 +63,8 @@ SEED_CHANNELS = {
         "safe_zone_ru", "cyberpolice_ru", "antiphishing_ru",
         "data_security_ru", "cyber_news_ru", "security_week",
         "infosec_ru", "itsec_news", "cyber_security_news", "hack_news",
-        "kaspersky", "securitylab", "true_sec", "codeby",
-        "hacker_news_ru", "cyber_ru", "security_news_ru",
+        "kaspersky", "securitylab", "hacker_news_ru",
+        "cyber_ru", "security_news_ru", "infosecurity",
     ],
     "ai": [
         "ai_news_ru", "neural_networks", "gpt_ru", "ai_art_ru",
@@ -100,12 +110,21 @@ def get_admin_chat_id():
     return DEFAULT_ADMIN_CHAT_ID
 
 
-def is_blacklisted(channel):
-    ch_lower = channel.lower()
-    for b in BLACKLIST:
-        if b.lower() in ch_lower or ch_lower in b.lower():
-            return True
-    return False
+def _normalize(s: str) -> str:
+    """Очищает строку: убирает @, пробелы, приводит к нижнему регистру."""
+    return s.lower().strip().lstrip("@").strip()
+
+
+def is_blacklisted(channel: str) -> bool:
+    """Проверяет ТОЛЬКО точное совпадение юзернейма с чёрным списком."""
+    ch = _normalize(channel)
+    return ch in [_normalize(b) for b in BLACKLIST]
+
+
+def is_title_blacklisted(title: str) -> bool:
+    """Проверяет точное совпадение названия канала с чёрным списком."""
+    t = _normalize(title)
+    return t in [_normalize(b) for b in BLACKLIST]
 
 
 async def _call_api(url, api_key, model, prompt, temperature=0.7):
@@ -220,10 +239,6 @@ async def generate_comment_variants(post_text, channel_key):
 
 
 async def discover_channels(channel_key, max_new=3):
-    """
-    Возвращает каналы, отфильтрованные по ключевым словам.
-    Без строгой проверки комментариев.
-    """
     candidates = list(SEED_CHANNELS.get(channel_key, []))
     random.shuffle(candidates)
 
@@ -237,14 +252,18 @@ async def discover_channels(channel_key, max_new=3):
             break
         checked += 1
 
+        # Точная проверка юзернейма
         if is_blacklisted(ch):
+            print(f"   🚫 {ch} — в чёрном списке")
             continue
 
         info = await _check_channel_web_preview(ch)
         if not info:
             continue
 
-        if is_blacklisted(info.get("title", "")):
+        # Точная проверка названия
+        if is_title_blacklisted(info.get("title", "")):
+            print(f"   🚫 {ch} — название в чёрном списке")
             continue
 
         combined = f"{info['title']} {info['description']} {info['last_post']}"
