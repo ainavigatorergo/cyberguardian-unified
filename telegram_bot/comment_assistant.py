@@ -18,6 +18,20 @@ OPENROUTER_MODELS = [
     "google/gemma-3-12b-it:free",
 ]
 
+# === ЧЁРНЫЙ СПИСОК КАНАЛОВ (не показывать в дайджесте) ===
+BLACKLIST = [
+    "cisoclub",           # CISOCLUB - кибербезопасность и ИТ
+    "true_security",      # Telegram: Contact @true_security
+    "true_sec",           # дубль
+    "kiber_bez",          # КИБЕР БЕЗ...
+    "chatgpt_ru",         # ChatGPT - Ru
+    "gpt_chat_ru",        # дубль
+    "ai_startups",        # ai_startups
+    "claude_ru",          # claude_ru | Available for purchase
+    "gemini_ru",          # возможно тоже
+    "chatgpt_ru_official", # на всякий случай
+]
+
 SEARCH_KEYWORDS = {
     "cyber": [
         "кибербезопасность", "cybersecurity", "инфобез", "infosec",
@@ -33,28 +47,26 @@ SEARCH_KEYWORDS = {
     ],
 }
 
-# === РАСШИРЕННЫЙ СПИСОК КАНАЛОВ ===
 SEED_CHANNELS = {
     "cyber": [
         "cybersecurity_ru", "infosecurity", "securitylab", "kaspersky",
-        "positive_technologies", "bizone_ru", "cisoclub", "true_sec",
-        "codeby_ru", "xakep_ru", "anti_malware", "cnews_ru",
-        "sec_ru", "bugbounty_ru", "pentestit", "security_moscow",
-        "true_security", "in4security", "aciso_ru", "itsec_ru",
-        "safe_zone_ru", "cyberpolice_ru", "antiphishing_ru",
+        "positive_technologies", "bizone_ru", "codeby_ru", "xakep_ru",
+        "anti_malware", "cnews_ru", "sec_ru", "bugbounty_ru",
+        "pentestit", "security_moscow", "in4security", "aciso_ru",
+        "itsec_ru", "safe_zone_ru", "cyberpolice_ru", "antiphishing_ru",
         "data_security_ru", "cyber_news_ru", "security_week",
-        "infosec_ru", "itsec_news", "security_alert", "kiber_bez",
+        "infosec_ru", "itsec_news", "security_alert",
+        "cyber_security_news", "hack_news", "infosec_channel",
     ],
     "ai": [
         "ai_news_ru", "neural_networks", "gpt_ru", "ai_art_ru",
         "openai_ru", "data_secrets", "aiconference", "neuro_ru",
-        "ai_for_business", "gpt_chat_ru", "midjourney_ru",
-        "seeallochnaya", "dl_ru", "gpt4_ru", "ai_daily",
-        "machinelearning_ru", "deep_learning_ru", "prompt_engineering",
-        "neuro_channel", "ai_machinelearning_big_data", "ai_discussions",
-        "chatgpt_ru", "claude_ru", "gemini_ru", "llm_ru",
-        "ai_startups", "ai_tools_ru", "neuro_news", "ai_practice",
-        "gpt_news_ru",
+        "ai_for_business", "midjourney_ru", "seeallochnaya", "dl_ru",
+        "gpt4_ru", "ai_daily", "machinelearning_ru", "deep_learning_ru",
+        "prompt_engineering", "neuro_channel", "ai_machinelearning_big_data",
+        "ai_discussions", "llm_ru", "ai_tools_ru", "neuro_news",
+        "ai_practice", "gpt_news_ru", "ai_technologies", "neural_networks_ru",
+        "ai_business_ru", "machine_learning_news",
     ],
 }
 
@@ -82,6 +94,11 @@ def save_admin_chat_id(chat_id: int):
 def get_admin_chat_id():
     data = _load_json(ADMIN_FILE, {})
     return data.get("chat_id")
+
+
+def is_blacklisted(channel):
+    """Проверяет, в чёрном ли списке канал."""
+    return channel.lower() in [b.lower() for b in BLACKLIST]
 
 
 async def _call_api(url, api_key, model, prompt, temperature=0.7):
@@ -201,7 +218,7 @@ async def generate_comment_variants(post_text, channel_key):
 async def discover_channels(channel_key, max_new=3):
     """
     Возвращает 3 случайных канала с открытыми комментариями.
-    Так как Render стирает файлы, используем рандомизацию вместо seen-логики.
+    Исключает чёрный список.
     """
     candidates = list(SEED_CHANNELS.get(channel_key, []))
     random.shuffle(candidates)
@@ -212,17 +229,24 @@ async def discover_channels(channel_key, max_new=3):
     for ch in candidates:
         if len(new_channels) >= max_new:
             break
-        if checked >= 15:  # проверяем максимум 15 каналов, чтобы не тормозить
+        if checked >= 20:
             break
         checked += 1
+
+        # Пропускаем чёрный список
+        if is_blacklisted(ch):
+            continue
 
         info = await _check_channel_web_preview(ch)
         if not info:
             continue
 
+        # Также проверяем по названию
+        if is_blacklisted(info.get("title", "").lower()):
+            continue
+
         combined = f"{info['title']} {info['description']} {info['last_post']}"
         if _matches_keywords(combined, channel_key):
-            # Приоритет каналам с открытыми комментариями
             if info.get("has_comments"):
                 new_channels.append({
                     "channel": ch,
@@ -232,16 +256,21 @@ async def discover_channels(channel_key, max_new=3):
                     "has_comments": True,
                 })
 
-    # Если с открытыми комментариями не нашли — добираем любыми
     if len(new_channels) < max_new:
         for ch in candidates:
             if len(new_channels) >= max_new:
                 break
             if any(c["channel"] == ch for c in new_channels):
                 continue
+            if is_blacklisted(ch):
+                continue
+
             info = await _check_channel_web_preview(ch)
             if not info:
                 continue
+            if is_blacklisted(info.get("title", "").lower()):
+                continue
+
             combined = f"{info['title']} {info['description']} {info['last_post']}"
             if _matches_keywords(combined, channel_key):
                 new_channels.append({
