@@ -22,6 +22,7 @@ from generator import generate_post, generate_image, generate_ideas
 from scheduler import start_scheduler
 from comment_assistant import send_daily_digest, save_admin_chat_id
 from analytics import send_stats_now, increment_post_count
+from api_monitor import get_api_status
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ def bottom_menu():
         ],
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder="Нажми «Главное меню» или напиши команду"
+        input_field_placeholder="Нажми «Главное меню»"
     )
     return kb
 
@@ -60,7 +61,7 @@ def main_menu():
         ],
         [
             InlineKeyboardButton(text="🔔 Дайджест", callback_data="menu_digest"),
-            InlineKeyboardButton(text="📈 Статус", callback_data="menu_status"),
+            InlineKeyboardButton(text="🔍 Статус API", callback_data="menu_api"),
         ],
         [InlineKeyboardButton(text="📢 Опубликовать вручную", callback_data="menu_manual")],
     ])
@@ -178,18 +179,16 @@ async def menu_analytics(callback: types.CallbackQuery):
         await callback.message.answer(f"❌ Ошибка: {e}")
 
 
-@dp.callback_query(F.data == "menu_status")
-async def menu_status(callback: types.CallbackQuery):
-    status = "✅ <b>Бот работает</b>\n\n"
-    status += f"📅 Время: <code>{datetime.now().strftime('%H:%M:%S')}</code>\n\n"
-    for key, ch in CHANNELS.items():
-        emoji = "🔐" if key == "cyber" else "🤖"
-        status += f"{emoji} <b>{ch['name']}</b>\n   📍 {ch['telegram_channel']}\n\n"
-    try:
-        await callback.message.edit_text(status, reply_markup=main_menu())
-    except:
-        await callback.message.answer(status, reply_markup=main_menu())
+# === СТАТУС API ===
+@dp.callback_query(F.data == "menu_api")
+async def menu_api(callback: types.CallbackQuery):
+    await callback.message.edit_text("🔍 Проверяю API... ⏳")
     await callback.answer()
+    try:
+        await get_api_status(bot)
+        await callback.message.answer("✅ Статус отправлен в личку")
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка: {e}")
 
 
 @dp.callback_query(F.data == "menu_back")
@@ -380,7 +379,7 @@ async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
         else:
             photo = FSInputFile(image_path)
             await bot.send_photo(profile["telegram_channel"], photo, caption=post_text)
-        increment_post_count()  # Счётчик постов
+        increment_post_count()
         try:
             await callback.message.delete()
         except:
