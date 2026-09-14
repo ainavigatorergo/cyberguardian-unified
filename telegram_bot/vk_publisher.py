@@ -18,7 +18,7 @@ async def _upload_photo(image_path, token, group_id):
         async with session.get(f"{VK_API_URL}photos.getWallUploadServer", params=params) as resp:
             data = await resp.json()
             if "error" in data:
-                raise Exception(f"getWallUploadServer error: {data['error']}")
+                raise Exception(f"getWallUploadServer: {data['error']}")
             upload_url = data["response"]["upload_url"]
 
         # 2. Загружаем файл
@@ -29,7 +29,7 @@ async def _upload_photo(image_path, token, group_id):
                 upload_data = await resp.json()
 
         if "photo" not in upload_data:
-            raise Exception(f"upload error: {upload_data}")
+            raise Exception(f"upload: {upload_data}")
 
         # 3. Сохраняем фото
         params = {
@@ -43,25 +43,18 @@ async def _upload_photo(image_path, token, group_id):
         async with session.get(f"{VK_API_URL}photos.saveWallPhoto", params=params) as resp:
             save_data = await resp.json()
             if "error" in save_data:
-                raise Exception(f"saveWallPhoto error: {save_data['error']}")
+                raise Exception(f"saveWallPhoto: {save_data['error']}")
             photo = save_data["response"][0]
             return f"photo{photo['owner_id']}_{photo['id']}"
 
 
 async def publish_to_vk(channel_key, text, image_path=None):
-    """
-    Публикует пост в VK-сообщество.
-    
-    :param channel_key: "cyber" или "ai"
-    :param text: текст поста
-    :param image_path: путь к картинке (или URL)
-    :return: True при успехе
-    """
+    """Публикует пост в VK-сообщество."""
     token = VK_TOKENS.get(channel_key)
     group_id = VK_GROUP_IDS.get(channel_key)
 
     if not token or not group_id:
-        print(f"⚠️ VK токен или group_id для {channel_key} не заданы")
+        print(f"⚠️ VK токен/group_id для {channel_key} не заданы")
         return False
 
     try:
@@ -69,12 +62,11 @@ async def publish_to_vk(channel_key, text, image_path=None):
             params = {
                 "access_token": token,
                 "v": VK_API_VERSION,
-                "owner_id": -group_id,  # с минусом для сообщества
+                "owner_id": -group_id,
                 "from_group": 1,
                 "message": text,
             }
 
-            # Загружаем фото, если есть
             if image_path and not image_path.startswith("http") and os.path.exists(image_path):
                 try:
                     attachment = await _upload_photo(image_path, token, group_id)
@@ -87,7 +79,7 @@ async def publish_to_vk(channel_key, text, image_path=None):
                 result = await resp.json()
                 if "error" in result:
                     err = result["error"]
-                    print(f"❌ VK error: {err.get('error_msg', err)}")
+                    print(f"❌ VK error: {err.get('error_msg', err)} (code: {err.get('error_code')})")
                     return False
                 post_id = result["response"]["post_id"]
                 print(f"✅ Опубликовано в VK (post_id: {post_id})")
