@@ -9,8 +9,8 @@ from config import DATA_DIR, PROVOD_API_KEY, OPENROUTER_API_KEY
 
 ADMIN_FILE = os.path.join(DATA_DIR, "admin_chat.json")
 
-# === ЮЗЕРНЕЙМ АДМИНА (fallback, если chat_id не сохранён) ===
-ADMIN_USERNAME = "@kostaErgo"
+# === ТВОЙ CHAT_ID (дефолтный, чтобы дайджест работал всегда) ===
+DEFAULT_ADMIN_CHAT_ID = 5053770400
 
 PROVOD_URL = "https://api.provod.ai/v1/chat/completions"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -21,7 +21,6 @@ OPENROUTER_MODELS = [
     "google/gemma-3-12b-it:free",
 ]
 
-# === ЧЁРНЫЙ СПИСОК КАНАЛОВ ===
 BLACKLIST = [
     "cisoclub", "true_security", "true_sec", "kiber_bez",
     "chatgpt_ru", "gpt_chat_ru", "ai_startups", "claude_ru",
@@ -93,7 +92,11 @@ def save_admin_chat_id(chat_id: int):
 
 def get_admin_chat_id():
     data = _load_json(ADMIN_FILE, {})
-    return data.get("chat_id")
+    saved = data.get("chat_id")
+    if saved:
+        return saved
+    # Fallback на дефолтный
+    return DEFAULT_ADMIN_CHAT_ID
 
 
 def is_blacklisted(channel):
@@ -278,11 +281,8 @@ async def discover_channels(channel_key, max_new=3):
 
 
 async def send_daily_digest(bot):
-    # === Определяем, куда отправлять ===
     target = get_admin_chat_id()
-    if not target:
-        target = ADMIN_USERNAME
-        print(f"ℹ️ chat_id не найден, используем юзернейм: {ADMIN_USERNAME}")
+    print(f"📤 Дайджест → chat_id: {target}")
 
     try:
         await bot.send_message(
@@ -292,7 +292,7 @@ async def send_daily_digest(bot):
             "🔍 Ищу каналы с открытыми комментариями..."
         )
     except Exception as e:
-        print(f"⚠️ Не удалось отправить первое сообщение: {e}")
+        print(f"❌ Не удалось отправить первое сообщение: {e}")
         return False
 
     for channel_key in ["cyber", "ai"]:
