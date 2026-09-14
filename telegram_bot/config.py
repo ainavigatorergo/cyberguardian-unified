@@ -1,13 +1,11 @@
 import os
 
-# === Токены и ключи ===
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8959872205:AAEYODqzyx_CG4PTGneoBCoBOVzMlVX2vRo")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 PROVOD_API_KEY = os.getenv("PROVOD_API_KEY", "sk_572d6f9c130ad10c5cfc7a6d48ab8421197328195c52278a")
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "nsag1sPRpOnRupyvRMm6A5cZbZJgvuSfpX1DeFfFrOYksOq5XJMgpZSY")
 POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "sk_IO2JusirCuHRbVzBfZ6EEoDUkcjyRqU6")
 
-# === VK токены и ID групп ===
 VK_TOKENS = {
     "cyber": os.getenv("VK_TOKEN_CYBER", "vk1.a.kPjS4OrhX2Vt5yMKw49l-p3l3bmE6uQoyPiDF4XpeTGstsUUNA3GY22YShf5evspiZGOddAtDCk5QSzCxFZc1UUfZxtdIl__Y5sYnZwJfZncsa8ybMmhf_eE-LWynH2mHhYh6RTD08P0FJpbIFcSlccQ3Mgs7-hyo-hUKHXDV2xOKezxEeXTwd8Lhv2tvyOhwEHWlQYJWAWw7YfQXL9Xpw"),
     "ai": os.getenv("VK_TOKEN_AI", "vk1.a.5oc-ybsZqzZ7A0GZOL8ihsDvhbJxd_AGuADu44PWMD_AsdWLf_0962b6_GRt4PvqW9Jo39uwznFV67pNYTK81tUSNKTNN_nexsWcjmjQ3MVEEFJCV-cHHGtoYNfFWrKLtwzLJs7zKy0673K7w4Iakvfiad_r-zeN8kcEQdQJ5HMXwqnMaclebSu40HfTfygHbt9NJIZh7lQMpIw2FxBy1A"),
@@ -18,16 +16,13 @@ VK_GROUP_IDS = {
     "ai": int(os.getenv("VK_GROUP_AI", "241416521")),
 }
 
-# === Модель ===
 GEMINI_MODEL = "gemini-3.5-flash"
 
-# === Пути ===
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 VIDEO_PIPELINE_URL = os.getenv("VIDEO_PIPELINE_URL", "https://example.com")
 
-# === Профили каналов ===
 CHANNELS = {
     "cyber": {
         "name": "CyberGuardianSec",
@@ -77,7 +72,6 @@ CHANNELS = {
     },
 }
 
-# === Рубрики по дням недели (0=Пн, 6=Вс) ===
 RUBRICS = {
     0: {"key": "threat", "name": "🔥 Угроза недели", "format": "post",
         "task": "Разбери свежую утечку, атаку или уязвимость. Объясни, кому угрожает и что делать."},
@@ -95,6 +89,5 @@ RUBRICS = {
         "task": "Выбери самую актуальную и интересную тему недели. Свободный формат."},
 }
 
-# === Расписание ===
 DEFAULT_SCHEDULE = ["10:00", "19:00"]
 TIMEZONE = "Europe/Moscow"
