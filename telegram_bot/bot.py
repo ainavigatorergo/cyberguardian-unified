@@ -21,6 +21,7 @@ from config import BOT_TOKEN, CHANNELS
 from generator import generate_post, generate_image, generate_ideas
 from scheduler import start_scheduler
 from comment_assistant import send_daily_digest, save_admin_chat_id
+from analytics import send_stats_now, increment_post_count
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -38,9 +39,7 @@ class PostFlow(StatesGroup):
     approving = State()
 
 
-# === ПОСТОЯННАЯ КНОПКА ВНИЗУ ===
 def bottom_menu():
-    """Reply-клавиатура — всегда видна внизу экрана."""
     kb = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="🏠 Главное меню")],
@@ -52,15 +51,17 @@ def bottom_menu():
     return kb
 
 
-# === INLINE-МЕНЮ ===
 def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 Создать пост", callback_data="menu_create")],
         [
             InlineKeyboardButton(text="💡 Идеи тем", callback_data="menu_ideas"),
-            InlineKeyboardButton(text="📊 Статус", callback_data="menu_status"),
+            InlineKeyboardButton(text="📊 Аналитика", callback_data="menu_analytics"),
         ],
-        [InlineKeyboardButton(text="🔔 Дайджест каналов", callback_data="menu_digest")],
+        [
+            InlineKeyboardButton(text="🔔 Дайджест", callback_data="menu_digest"),
+            InlineKeyboardButton(text="📈 Статус", callback_data="menu_status"),
+        ],
         [InlineKeyboardButton(text="📢 Опубликовать вручную", callback_data="menu_manual")],
     ])
 
@@ -114,7 +115,6 @@ async def _send_preview(chat_id, post_text, image_path, channel_key, reply_marku
                              reply_markup=reply_markup)
 
 
-# === /start ===
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
@@ -133,14 +133,12 @@ async def cmd_start(message: types.Message, state: FSMContext):
     await message.answer("Главное меню:", reply_markup=main_menu())
 
 
-# === КНОПКА "🏠 ГЛАВНОЕ МЕНЮ" ===
 @dp.message(F.text == "🏠 Главное меню")
 async def bottom_menu_handler(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("🏠 Главное меню:", reply_markup=main_menu())
 
 
-# === /digest ===
 @dp.message(Command("digest"))
 async def cmd_digest(message: types.Message):
     await message.answer("🔍 Ищу подходящие каналы... Это займёт 30–60 секунд.")
@@ -168,7 +166,18 @@ async def menu_digest(callback: types.CallbackQuery):
         await callback.message.answer(f"❌ Ошибка: {e}")
 
 
-# === СТАТУС ===
+# === АНАЛИТИКА ===
+@dp.callback_query(F.data == "menu_analytics")
+async def menu_analytics(callback: types.CallbackQuery):
+    await callback.message.edit_text("📊 Собираю статистику... ⏳")
+    await callback.answer()
+    try:
+        await send_stats_now(bot)
+        await callback.message.answer("✅ Статистика отправлена в личку")
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка: {e}")
+
+
 @dp.callback_query(F.data == "menu_status")
 async def menu_status(callback: types.CallbackQuery):
     status = "✅ <b>Бот работает</b>\n\n"
@@ -183,7 +192,6 @@ async def menu_status(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# === НАЗАД ===
 @dp.callback_query(F.data == "menu_back")
 async def menu_back(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
@@ -199,7 +207,6 @@ async def menu_back(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# === ОТМЕНА ПРЕВЬЮ ===
 @dp.callback_query(F.data == "cancel_preview")
 async def cancel_preview(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
@@ -211,7 +218,6 @@ async def cancel_preview(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# === ИДЕИ ===
 @dp.callback_query(F.data == "menu_ideas")
 async def menu_ideas(callback: types.CallbackQuery):
     try:
@@ -271,7 +277,6 @@ async def more_ideas(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.answer(f"❌ Ошибка: {e}", reply_markup=main_menu())
 
 
-# === ИСПОЛЬЗОВАТЬ ИДЕЮ ===
 @dp.callback_query(F.data.startswith("useidea_"))
 async def use_idea(callback: types.CallbackQuery, state: FSMContext):
     parts = callback.data.split("_")
@@ -308,7 +313,6 @@ async def use_idea(callback: types.CallbackQuery, state: FSMContext):
         await state.clear()
 
 
-# === СОЗДАТЬ ПОСТ ===
 @dp.callback_query(F.data == "menu_create")
 async def menu_create(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(PostFlow.entering_topic)
@@ -361,7 +365,6 @@ async def handle_topic(message: types.Message, state: FSMContext):
         await state.clear()
 
 
-# === ПУБЛИКАЦИЯ ===
 @dp.callback_query(F.data == "approve_publish", PostFlow.approving)
 async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -377,6 +380,7 @@ async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
         else:
             photo = FSInputFile(image_path)
             await bot.send_photo(profile["telegram_channel"], photo, caption=post_text)
+        increment_post_count()  # Счётчик постов
         try:
             await callback.message.delete()
         except:
@@ -389,7 +393,6 @@ async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# === ПЕРЕГЕНЕРАЦИЯ ===
 @dp.callback_query(F.data == "approve_regen", PostFlow.approving)
 async def approve_regen(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -419,7 +422,6 @@ async def approve_regen(callback: types.CallbackQuery, state: FSMContext):
         await state.clear()
 
 
-# === РУЧНАЯ ПУБЛИКАЦИЯ ===
 @dp.callback_query(F.data == "menu_manual")
 async def menu_manual(callback: types.CallbackQuery):
     text = ("Отправь текст в формате:\n\n"
@@ -446,13 +448,13 @@ async def handle_manual_post(message: types.Message):
         return
     try:
         await bot.send_message(CHANNELS[channel_key]["telegram_channel"], text)
+        increment_post_count()
         await message.answer(f"✅ Опубликовано в <b>{CHANNELS[channel_key]['name']}</b>",
                              reply_markup=main_menu())
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
 
 
-# === Flask ===
 @app.route("/")
 def health():
     return "OK", 200
@@ -478,7 +480,5 @@ async def main():
 
 if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    asyncio.run(main())
     flask_thread.start()
     asyncio.run(main())
