@@ -9,7 +9,11 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram.types import (
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton,
+    FSInputFile
+)
 from flask import Flask, request
 import threading
 
@@ -34,7 +38,21 @@ class PostFlow(StatesGroup):
     approving = State()
 
 
-# === КЛАВИАТУРЫ ===
+# === ПОСТОЯННАЯ КНОПКА ВНИЗУ ===
+def bottom_menu():
+    """Reply-клавиатура — всегда видна внизу экрана."""
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🏠 Главное меню")],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Нажми «Главное меню» или напиши команду"
+    )
+    return kb
+
+
+# === INLINE-МЕНЮ ===
 def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 Создать пост", callback_data="menu_create")],
@@ -100,7 +118,6 @@ async def _send_preview(chat_id, post_text, image_path, channel_key, reply_marku
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
-    # Сохраняем chat_id для дайджестов
     try:
         save_admin_chat_id(message.chat.id)
     except Exception as e:
@@ -111,11 +128,19 @@ async def cmd_start(message: types.Message, state: FSMContext):
         "🔐 <b>CyberGuardianSec</b> — кибербезопасность\n"
         "🤖 <b>AI Navigator</b> — нейросети и автоматизация\n\n"
         "Выбери действие 👇",
-        reply_markup=main_menu()
+        reply_markup=bottom_menu()
     )
+    await message.answer("Главное меню:", reply_markup=main_menu())
 
 
-# === /digest — ручной запуск дайджеста ===
+# === КНОПКА "🏠 ГЛАВНОЕ МЕНЮ" ===
+@dp.message(F.text == "🏠 Главное меню")
+async def bottom_menu_handler(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("🏠 Главное меню:", reply_markup=main_menu())
+
+
+# === /digest ===
 @dp.message(Command("digest"))
 async def cmd_digest(message: types.Message):
     await message.answer("🔍 Ищу подходящие каналы... Это займёт 30–60 секунд.")
@@ -124,12 +149,11 @@ async def cmd_digest(message: types.Message):
         if result:
             await message.answer("✅ Дайджест отправлен в личку")
         else:
-            await message.answer("⚠️ Не удалось отправить дайджест. Проверь логи.")
+            await message.answer("⚠️ Не удалось отправить дайджест.")
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
 
 
-# === Кнопка "🔔 Дайджест каналов" ===
 @dp.callback_query(F.data == "menu_digest")
 async def menu_digest(callback: types.CallbackQuery):
     await callback.message.edit_text("🔍 Ищу подходящие каналы... Это займёт 30–60 секунд.")
@@ -139,7 +163,7 @@ async def menu_digest(callback: types.CallbackQuery):
         if result:
             await callback.message.answer("✅ Дайджест отправлен в личку")
         else:
-            await callback.message.answer("⚠️ Не удалось отправить. Проверь логи Render.")
+            await callback.message.answer("⚠️ Не удалось отправить.")
     except Exception as e:
         await callback.message.answer(f"❌ Ошибка: {e}")
 
@@ -428,7 +452,7 @@ async def handle_manual_post(message: types.Message):
         await message.answer(f"❌ Ошибка: {e}")
 
 
-# === Flask для Render ===
+# === Flask ===
 @app.route("/")
 def health():
     return "OK", 200
@@ -454,5 +478,7 @@ async def main():
 
 if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    asyncio.run(main())
     flask_thread.start()
     asyncio.run(main())
