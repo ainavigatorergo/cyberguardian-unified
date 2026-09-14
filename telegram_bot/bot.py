@@ -23,6 +23,7 @@ from scheduler import start_scheduler
 from comment_assistant import send_daily_digest, save_admin_chat_id
 from analytics import send_stats_now, increment_post_count
 from api_monitor import get_api_status
+from vk_publisher import publish_to_vk
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -92,10 +93,13 @@ def ideas_inline(channel_key, ideas):
 def approve_inline():
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Опубликовать", callback_data="approve_publish"),
-            InlineKeyboardButton(text="🔄 Перегенерировать", callback_data="approve_regen"),
+            InlineKeyboardButton(text="✅ В TG + VK", callback_data="approve_publish"),
+            InlineKeyboardButton(text="📱 Только TG", callback_data="approve_publish_tg"),
         ],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_preview")]
+        [
+            InlineKeyboardButton(text="🔄 Перегенерировать", callback_data="approve_regen"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_preview"),
+        ],
     ])
 
 
@@ -167,7 +171,6 @@ async def menu_digest(callback: types.CallbackQuery):
         await callback.message.answer(f"❌ Ошибка: {e}")
 
 
-# === АНАЛИТИКА ===
 @dp.callback_query(F.data == "menu_analytics")
 async def menu_analytics(callback: types.CallbackQuery):
     await callback.message.edit_text("📊 Собираю статистику... ⏳")
@@ -179,7 +182,6 @@ async def menu_analytics(callback: types.CallbackQuery):
         await callback.message.answer(f"❌ Ошибка: {e}")
 
 
-# === СТАТУС API ===
 @dp.callback_query(F.data == "menu_api")
 async def menu_api(callback: types.CallbackQuery):
     await callback.message.edit_text("🔍 Проверяю API... ⏳")
@@ -364,6 +366,7 @@ async def handle_topic(message: types.Message, state: FSMContext):
         await state.clear()
 
 
+# === ПУБЛИКАЦИЯ В TG + VK ===
 @dp.callback_query(F.data == "approve_publish", PostFlow.approving)
 async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -371,23 +374,75 @@ async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
     post_text = data.get("post_text", "")
     image_path = data.get("image_url", "")
     profile = CHANNELS[channel_key]
+
     try:
-        if len(post_text) > 1024:
-            post_text = post_text[:1020] + "..."
+        tg_text = post_text[:1020] + "..." if len(post_text) > 1024 else post_text
+
+        # === Telegram ===
         if image_path.startswith("http"):
-            await bot.send_photo(profile["telegram_channel"], image_path, caption=post_text)
+            await bot.send_photo(profile["telegram_channel"], image_path, caption=tg_text)
         else:
             photo = FSInputFile(image_path)
-            await bot.send_photo(profile["telegram_channel"], photo, caption=post_text)
+            await bot.send_photo(profile["telegram_channel"], photo, caption=tg_text)
         increment_post_count()
+        print(f"✅ Опубликовано в Telegram ({channel_key})")
+
+        # === VK ===
+        print(f"📤 Публикую в VK ({channel_key})...")
+        vk_result = await publish_to_vk(channel_key, post_text, image_path)
+
         try:
             await callback.message.delete()
         except:
             pass
-        await callback.message.answer(f"🎉 Пост опубликован в <b>{profile['name']}</b>",
-                                       reply_markup=main_menu())
+
+        if vk_result:
+            result_msg = f"🎉 Опубликовано в <b>Telegram + VK</b> ({profile['name']})"
+        else:
+            result_msg = f"⚠️ Telegram — OK, но VK — ошибка. Проверь логи Render."
+
+        await callback.message.answer(result_msg, reply_markup=main_menu())
+
+    except Exception as e:
+        logger.error(f"Ошибка публикации: {e}")
+        await callback.message.answer(f"❌ Ошибка: {e}", reply_markup=main_menu())
+
+    await state.clear()
+    await callback.answer()
+
+
+# === ПУБЛИКАЦИЯ ТОЛЬКО В TG ===
+@dp.callback_query(F.data == "approve_publish_tg", PostFlow.approving)
+async def approve_publish_tg(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    channel_key = data.get("channel_key", "cyber")
+    post_text = data.get("post_text", "")
+    image_path = data.get("image_url", "")
+    profile = CHANNELS[channel_key]
+
+    try:
+        tg_text = post_text[:1020] + "..." if len(post_text) > 1024 else post_text
+
+        if image_path.startswith("http"):
+            await bot.send_photo(profile["telegram_channel"], image_path, caption=tg_text)
+        else:
+            photo = FSInputFile(image_path)
+            await bot.send_photo(profile["telegram_channel"], photo, caption=tg_text)
+        increment_post_count()
+        print(f"✅ Опубликовано в Telegram ({channel_key}) — без VK")
+
+        try:
+            await callback.message.delete()
+        except:
+            pass
+
+        await callback.message.answer(
+            f"📱 Опубликовано только в <b>Telegram</b> ({profile['name']})",
+            reply_markup=main_menu()
+        )
     except Exception as e:
         await callback.message.answer(f"❌ Ошибка: {e}", reply_markup=main_menu())
+
     await state.clear()
     await callback.answer()
 
