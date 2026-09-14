@@ -2,12 +2,12 @@ import asyncio
 import json
 import os
 import re
+import random
 from datetime import datetime
 import aiohttp
 from config import DATA_DIR, PROVOD_API_KEY, OPENROUTER_API_KEY
 
 ADMIN_FILE = os.path.join(DATA_DIR, "admin_chat.json")
-SEEN_FILE = os.path.join(DATA_DIR, "seen_channels.json")
 
 PROVOD_URL = "https://api.provod.ai/v1/chat/completions"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -33,6 +33,7 @@ SEARCH_KEYWORDS = {
     ],
 }
 
+# === РАСШИРЕННЫЙ СПИСОК КАНАЛОВ ===
 SEED_CHANNELS = {
     "cyber": [
         "cybersecurity_ru", "infosecurity", "securitylab", "kaspersky",
@@ -40,12 +41,20 @@ SEED_CHANNELS = {
         "codeby_ru", "xakep_ru", "anti_malware", "cnews_ru",
         "sec_ru", "bugbounty_ru", "pentestit", "security_moscow",
         "true_security", "in4security", "aciso_ru", "itsec_ru",
+        "safe_zone_ru", "cyberpolice_ru", "antiphishing_ru",
+        "data_security_ru", "cyber_news_ru", "security_week",
+        "infosec_ru", "itsec_news", "security_alert", "kiber_bez",
     ],
     "ai": [
         "ai_news_ru", "neural_networks", "gpt_ru", "ai_art_ru",
         "openai_ru", "data_secrets", "aiconference", "neuro_ru",
         "ai_for_business", "gpt_chat_ru", "midjourney_ru",
         "seeallochnaya", "dl_ru", "gpt4_ru", "ai_daily",
+        "machinelearning_ru", "deep_learning_ru", "prompt_engineering",
+        "neuro_channel", "ai_machinelearning_big_data", "ai_discussions",
+        "chatgpt_ru", "claude_ru", "gemini_ru", "llm_ru",
+        "ai_startups", "ai_tools_ru", "neuro_news", "ai_practice",
+        "gpt_news_ru",
     ],
 }
 
@@ -94,7 +103,6 @@ async def _call_api(url, api_key, model, prompt, temperature=0.7):
 
 
 async def _smart_call(prompt, temperature=0.7):
-    """Пробует provod.ai и OpenRouter."""
     for model in PROVOD_MODELS:
         try:
             return await _call_api(PROVOD_URL, PROVOD_API_KEY, model, prompt, temperature)
@@ -126,7 +134,6 @@ async def _check_channel_web_preview(channel):
         desc_match = re.search(r'<meta property="og:description" content="([^"]+)"', html)
         description = desc_match.group(1) if desc_match else ""
 
-        # Проверяем, есть ли группа обсуждений (признак открытых комментариев)
         has_comments = "tgme_widget_message_replies" in html or "comments" in html.lower()
 
         posts = re.findall(r'<div class="tgme_widget_message_text[^>]*>(.*?)</div>', html, re.DOTALL)
@@ -153,7 +160,6 @@ def _matches_keywords(text, channel_key):
 
 
 async def generate_comment_variants(post_text, channel_key):
-    """Генерирует 3 варианта комментария к посту."""
     if channel_key == "cyber":
         context = "Ты — эксперт по кибербезопасности, ведёшь канал CyberGuardianSec."
     else:
@@ -167,12 +173,11 @@ async def generate_comment_variants(post_text, channel_key):
 
 Напиши ТРИ разных варианта комментария к этому посту.
 
-Требования к каждому:
-- 2–3 предложения.
+Требования:
+- 2–3 предложения каждый.
 - Экспертный, полезный, по делу.
 - Без ссылок на свой канал.
-- Без банальных фраз типа «отличный пост».
-- Варианты должны быть РАЗНЫМИ по подходу (экспертный, практический, вовлекающий).
+- Варианты РАЗНЫЕ по подходу.
 
 Формат ответа СТРОГО:
 ВАРИАНТ 1: [текст]
@@ -194,35 +199,46 @@ async def generate_comment_variants(post_text, channel_key):
 
 
 async def discover_channels(channel_key, max_new=3):
-    seen = _load_json(SEEN_FILE, {"cyber": [], "ai": []})
-    seen_list = seen.get(channel_key, [])
-
-    candidates = list(set(SEED_CHANNELS.get(channel_key, [])))
-    fresh = [ch for ch in candidates if ch not in seen_list]
-    old = [ch for ch in candidates if ch in seen_list]
+    """
+    Возвращает 3 случайных канала с открытыми комментариями.
+    Так как Render стирает файлы, используем рандомизацию вместо seen-логики.
+    """
+    candidates = list(SEED_CHANNELS.get(channel_key, []))
+    random.shuffle(candidates)
 
     new_channels = []
-    for ch in fresh:
+    checked = 0
+
+    for ch in candidates:
+        if len(new_channels) >= max_new:
+            break
+        if checked >= 15:  # проверяем максимум 15 каналов, чтобы не тормозить
+            break
+        checked += 1
+
         info = await _check_channel_web_preview(ch)
         if not info:
             continue
+
         combined = f"{info['title']} {info['description']} {info['last_post']}"
         if _matches_keywords(combined, channel_key):
-            new_channels.append({
-                "channel": ch,
-                "title": info["title"],
-                "last_post": info["last_post"][:250],
-                "url": info["url"],
-                "has_comments": info.get("has_comments", False),
-                "is_new": True,
-            })
-            if len(new_channels) >= max_new:
-                break
+            # Приоритет каналам с открытыми комментариями
+            if info.get("has_comments"):
+                new_channels.append({
+                    "channel": ch,
+                    "title": info["title"],
+                    "last_post": info["last_post"][:250],
+                    "url": info["url"],
+                    "has_comments": True,
+                })
 
+    # Если с открытыми комментариями не нашли — добираем любыми
     if len(new_channels) < max_new:
-        for ch in old:
+        for ch in candidates:
             if len(new_channels) >= max_new:
                 break
+            if any(c["channel"] == ch for c in new_channels):
+                continue
             info = await _check_channel_web_preview(ch)
             if not info:
                 continue
@@ -234,20 +250,12 @@ async def discover_channels(channel_key, max_new=3):
                     "last_post": info["last_post"][:250],
                     "url": info["url"],
                     "has_comments": info.get("has_comments", False),
-                    "is_new": False,
                 })
-
-    for ch in new_channels:
-        if ch["channel"] not in seen_list:
-            seen_list.append(ch["channel"])
-    seen[channel_key] = seen_list
-    _save_json(SEEN_FILE, seen)
 
     return new_channels
 
 
 async def send_daily_digest(bot):
-    """Отправляет дайджест с 3 вариантами комментариев."""
     admin_chat_id = get_admin_chat_id()
     if not admin_chat_id:
         print("⚠️ admin_chat_id не найден. Напиши боту /start")
@@ -258,7 +266,7 @@ async def send_daily_digest(bot):
             admin_chat_id,
             "🔔 <b>Дайджест для комментирования</b>\n"
             f"📅 {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
-            "🔍 Ищу каналы и генерирую варианты комментариев..."
+            "🔍 Ищу каналы с открытыми комментариями..."
         )
     except:
         pass
@@ -284,7 +292,6 @@ async def send_daily_digest(bot):
                 header += "⚠️ Комментарии могут быть закрыты\n"
             header += f"\n📄 <i>Последний пост:</i>\n{ch['last_post'][:250]}\n"
 
-            # Генерируем 3 варианта
             variants = await generate_comment_variants(ch['last_post'], channel_key)
 
             if variants:
@@ -292,13 +299,13 @@ async def send_daily_digest(bot):
                 for i, v in enumerate(variants, 1):
                     header += f"<b>{i}.</b> {v}\n\n"
             else:
-                header += "\n💬 <i>Не удалось сгенерировать комментарии. Напиши вручную.</i>\n"
+                header += "\n💬 <i>Не удалось сгенерировать комментарии.</i>\n"
 
             header += (
                 "\n📌 <b>Правила:</b>\n"
                 "• Публикуй от имени канала\n"
                 "• Без ссылок на свой канал\n"
-                "• Выбери один из вариантов или напиши свой"
+                "• Выбери один из вариантов"
             )
 
             try:
