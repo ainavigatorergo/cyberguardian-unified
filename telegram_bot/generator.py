@@ -4,7 +4,8 @@ import json
 import os
 import random
 import re
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
 from config import (
     PROVOD_API_KEY, OPENROUTER_API_KEY, CHANNELS, DATA_DIR,
     RUBRICS, POLLINATIONS_API_KEY
@@ -169,11 +170,11 @@ async def generate_post(topic, channel_key, rubric=None):
 Напиши пост на тему: {topic}
 
 ФОРМАТ ОТВЕТА СТРОГО:
-ЗАГОЛОВОК: [эмодзи + цепляющий заголовок, до 55 символов]
+ЗАГОЛОВОК: [цепляющий заголовок БЕЗ эмодзи, до 55 символов]
 ВСТУПЛЕНИЕ: [1–2 предложения, до 180 символов]
-ПУНКТ 1: [совет, до 55 символов]
-ПУНКТ 2: [совет, до 55 символов]
-ПУНКТ 3: [совет, до 55 символов]
+ПУНКТ 1: [совет БЕЗ эмодзи, до 55 символов]
+ПУНКТ 2: [совет БЕЗ эмодзи, до 55 символов]
+ПУНКТ 3: [совет БЕЗ эмодзи, до 55 символов]
 ВОПРОС: [вопрос к читателям, до 70 символов]
 ХЕШТЕГИ: [4 хештега через пробел]"""
 
@@ -264,17 +265,24 @@ def _wrap_text(text, font, max_width, draw):
     return lines
 
 
+def _remove_emoji(text):
+    """Убирает эмодзи и проблемные символы."""
+    return re.sub(r'[^\w\s\d\.,!?\-:;()«»"\']', '', text).strip()
+
+
 async def _get_ai_background(topic, channel_key):
     """Скачивает атмосферный AI-фон (без текста, без людей)."""
+    topic_clean = _remove_emoji(topic)[:80]
+
     if channel_key == "cyber":
         style = (
-            f"abstract cybersecurity background about {topic}, "
+            f"abstract cybersecurity background about {topic_clean}, "
             "dark navy blue and neon green, digital network, circuit patterns, "
             "no text, no people, no faces, no logos, cinematic, high quality"
         )
     else:
         style = (
-            f"abstract AI technology background about {topic}, "
+            f"abstract AI technology background about {topic_clean}, "
             "dark purple and neon green, neural network, glowing particles, "
             "no text, no people, no faces, no logos, cinematic, high quality"
         )
@@ -294,7 +302,6 @@ async def _get_ai_background(topic, channel_key):
                 if resp.status != 200:
                     return None
                 content = await resp.read()
-                from io import BytesIO
                 return Image.open(BytesIO(content)).convert("RGB")
     except Exception as e:
         print(f"   ⚠️ Ошибка загрузки фона: {e}")
@@ -306,49 +313,56 @@ def _overlay_text_on_bg(bg_img, parsed, channel_key):
     W, H = 1080, 1080
     bg = bg_img.resize((W, H)).convert("RGB")
 
-    # Затемняем верх и низ для читаемости
+    # Затемняющие плашки
     overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     ov_draw = ImageDraw.Draw(overlay)
     # Верхняя плашка (заголовок)
-    ov_draw.rectangle([0, 0, W, 340], fill=(0, 0, 0, 150))
-    # Нижняя плашка (пункты)
-    ov_draw.rectangle([0, H - 520, W, H], fill=(0, 0, 0, 170))
+    ov_draw.rectangle([0, 0, W, 420], fill=(0, 0, 0, 170))
+    # Нижняя плашка (пункты + бренд)
+    ov_draw.rectangle([0, H - 560, W, H], fill=(0, 0, 0, 190))
+    # Плашка под бренд (правый нижний угол — перекрывает pollinations.ai)
+    ov_draw.rectangle([W - 500, H - 90, W, H], fill=(0, 0, 0, 240))
 
     bg = Image.alpha_composite(bg.convert("RGBA"), overlay).convert("RGB")
     draw = ImageDraw.Draw(bg)
 
-    # Палитра
     if channel_key == "cyber":
         accent = (0, 255, 150)
-        brand = "🔐 CyberGuardianSec"
+        brand = "CyberGuardianSec"
     else:
         accent = (0, 255, 130)
-        brand = "🤖 AI Navigator"
+        brand = "AI Navigator"
 
-    font_title = _find_font(64, bold=True)
-    font_bullet = _find_font(38)
-    font_num = _find_font(32, bold=True)
+    font_title = _find_font(60, bold=True)
+    font_bullet = _find_font(36)
+    font_num = _find_font(30, bold=True)
     font_brand = _find_font(32, bold=True)
 
     pad = 60
 
-    # ЗАГОЛОВОК
-    title = parsed.get("title", "Без заголовка")
-    y = 70
-    for line in _wrap_text(title, font_title, W - 2 * pad, draw)[:2]:
-        # Обводка для читаемости
-        draw.text((pad, y), line, font=font_title, fill=(0, 0, 0),
-                  stroke_width=4, stroke_fill=(0, 0, 0))
-        draw.text((pad, y), line, font=font_title, fill=(255, 255, 255))
-        y += 78
+    # === ЗАГОЛОВОК (без эмодзи) ===
+    title = _remove_emoji(parsed.get("title", "Без заголовка"))
+    if not title:
+        title = "Без заголовка"
 
-    # ПУНКТЫ
+    y = 80
+    for line in _wrap_text(title, font_title, W - 2 * pad, draw)[:3]:
+        draw.text((pad, y), line, font=font_title, fill=(0, 0, 0),
+                  stroke_width=5, stroke_fill=(0, 0, 0))
+        draw.text((pad, y), line, font=font_title, fill=(255, 255, 255))
+        y += 74
+
+    # === ПУНКТЫ ===
     bullets = parsed.get("bullets", [])[:3]
     if not bullets:
         bullets = ["Подробности в посте", "Читай ниже", "Подпишись на канал"]
 
-    y = H - 480
+    y = H - 520
     for i, bullet in enumerate(bullets, 1):
+        bullet_clean = _remove_emoji(bullet)
+        if not bullet_clean:
+            bullet_clean = "..."
+
         # Кружок с цифрой
         cx, cy = pad + 26, y + 26
         draw.ellipse([cx - 26, cy - 26, cx + 26, cy + 26], fill=accent)
@@ -361,15 +375,15 @@ def _overlay_text_on_bg(bg_img, parsed, channel_key):
         draw.text((cx - nw // 2, cy - nh // 2 - 5), num, font=font_num, fill=(0, 0, 0))
 
         # Текст пункта
-        for line in _wrap_text(bullet, font_bullet, W - 2 * pad - 80, draw)[:2]:
+        for line in _wrap_text(bullet_clean, font_bullet, W - 2 * pad - 80, draw)[:2]:
             draw.text((pad + 80, y), line, font=font_bullet, fill=(0, 0, 0),
                       stroke_width=3, stroke_fill=(0, 0, 0))
             draw.text((pad + 80, y), line, font=font_bullet, fill=(240, 240, 240))
-            y += 52
+            y += 50
         y += 14
 
-    # БРЕНД
-    draw.text((pad, H - pad), brand, font=font_brand, fill=accent)
+    # === БРЕНД (с тёмной подложкой) ===
+    draw.text((W - 440, H - 65), brand, font=font_brand, fill=accent)
 
     return bg
 
@@ -384,9 +398,11 @@ async def generate_image(parsed, channel_key="cyber"):
             print(f"   ✏️ Накладываю текст...")
             card = _overlay_text_on_bg(bg, parsed, channel_key)
         else:
-            # Фолбэк: однотонный фон
             print(f"   ⚠️ Фон не загрузился, использую градиент")
-            bg = Image.new("RGB", (1080, 1080), (10, 20, 50) if channel_key == "cyber" else (40, 10, 60))
+            if channel_key == "cyber":
+                bg = Image.new("RGB", (1080, 1080), (10, 20, 50))
+            else:
+                bg = Image.new("RGB", (1080, 1080), (40, 10, 60))
             card = _overlay_text_on_bg(bg, parsed, channel_key)
 
         filename = f"{channel_key}_card_{abs(hash(parsed.get('title', '') + str(random.randint(1,99999)))) % 100000}.png"
