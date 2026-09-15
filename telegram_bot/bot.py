@@ -109,15 +109,19 @@ async def _send_preview(chat_id, post_text, image_path, channel_key, reply_marku
     if reply_markup is None:
         reply_markup = approve_inline()
 
-    if image_path.startswith("http"):
-        await bot.send_photo(chat_id, image_path,
-                             caption=f"📄 <b>Превью:</b>\n\n{post_text}",
-                             reply_markup=reply_markup)
-    else:
+    if image_path and not image_path.startswith("http") and os.path.exists(image_path):
         photo = FSInputFile(image_path)
         await bot.send_photo(chat_id, photo,
                              caption=f"📄 <b>Превью:</b>\n\n{post_text}",
                              reply_markup=reply_markup)
+    elif image_path and image_path.startswith("http"):
+        await bot.send_photo(chat_id, image_path,
+                             caption=f"📄 <b>Превью:</b>\n\n{post_text}",
+                             reply_markup=reply_markup)
+    else:
+        await bot.send_message(chat_id,
+                               f"📄 <b>Превью:</b>\n\n{post_text}",
+                               reply_markup=reply_markup)
 
 
 @dp.message(Command("start"))
@@ -299,8 +303,9 @@ async def use_idea(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.answer(f"{emoji} Генерирую пост на тему: <i>{topic}</i>... ⏳")
     chat_id = callback.message.chat.id
     try:
-        post_text = await generate_post(topic, channel_key)
-        image_path = await generate_image(topic, channel_key)
+        # === НОВАЯ ЛОГИКА: 2 значения ===
+        post_text, parsed = await generate_post(topic, channel_key)
+        image_path = await generate_image(parsed, channel_key)
         await state.update_data(topic=topic, post_text=post_text,
                                 image_url=image_path, channel_key=channel_key)
         await state.set_state(PostFlow.approving)
@@ -356,8 +361,9 @@ async def handle_topic(message: types.Message, state: FSMContext):
     emoji = "🔐" if channel_key == "cyber" else "🤖"
     await message.answer(f"⏳ Генерирую пост для {emoji} <b>{profile['name']}</b>...")
     try:
-        post_text = await generate_post(topic, channel_key)
-        image_path = await generate_image(topic, channel_key)
+        # === НОВАЯ ЛОГИКА: 2 значения ===
+        post_text, parsed = await generate_post(topic, channel_key)
+        image_path = await generate_image(parsed, channel_key)
         await state.update_data(topic=topic, post_text=post_text, image_url=image_path)
         await state.set_state(PostFlow.approving)
         await _send_preview(message.chat.id, post_text, image_path, channel_key)
@@ -379,11 +385,11 @@ async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
         tg_text = post_text[:1020] + "..." if len(post_text) > 1024 else post_text
 
         # === Telegram ===
-        if image_path.startswith("http"):
-            await bot.send_photo(profile["telegram_channel"], image_path, caption=tg_text)
-        else:
+        if image_path and os.path.exists(image_path):
             photo = FSInputFile(image_path)
             await bot.send_photo(profile["telegram_channel"], photo, caption=tg_text)
+        else:
+            await bot.send_message(profile["telegram_channel"], tg_text)
         increment_post_count()
         print(f"✅ Опубликовано в Telegram ({channel_key})")
 
@@ -399,7 +405,7 @@ async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
         if vk_result:
             result_msg = f"🎉 Опубликовано в <b>Telegram + VK</b> ({profile['name']})"
         else:
-            result_msg = f"⚠️ Telegram — OK, но VK — ошибка. Проверь логи Render."
+            result_msg = f"⚠️ Telegram — OK, VK — ошибка. Проверь логи Render."
 
         await callback.message.answer(result_msg, reply_markup=main_menu())
 
@@ -423,11 +429,11 @@ async def approve_publish_tg(callback: types.CallbackQuery, state: FSMContext):
     try:
         tg_text = post_text[:1020] + "..." if len(post_text) > 1024 else post_text
 
-        if image_path.startswith("http"):
-            await bot.send_photo(profile["telegram_channel"], image_path, caption=tg_text)
-        else:
+        if image_path and os.path.exists(image_path):
             photo = FSInputFile(image_path)
             await bot.send_photo(profile["telegram_channel"], photo, caption=tg_text)
+        else:
+            await bot.send_message(profile["telegram_channel"], tg_text)
         increment_post_count()
         print(f"✅ Опубликовано в Telegram ({channel_key}) — без VK")
 
@@ -463,8 +469,9 @@ async def approve_regen(callback: types.CallbackQuery, state: FSMContext):
             pass
     await callback.answer()
     try:
-        post_text = await generate_post(topic, channel_key)
-        image_path = await generate_image(topic, channel_key)
+        # === НОВАЯ ЛОГИКА: 2 значения ===
+        post_text, parsed = await generate_post(topic, channel_key)
+        image_path = await generate_image(parsed, channel_key)
         await state.update_data(post_text=post_text, image_url=image_path)
         try:
             await callback.message.delete()
