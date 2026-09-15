@@ -68,7 +68,7 @@ async def publish_rubric_post(bot, channel_key: str):
             if len(post_text) > 4096:
                 post_text = post_text[:4090] + "..."
             await bot.send_message(profile["telegram_channel"], post_text)
-            print(f"🎉 Лонгрид опубликован")
+            print(f"🎉 Лонгрид опубликован (без фото)")
             increment_post_count()
             print("📤 Публикую в VK...")
             await publish_to_vk(channel_key, post_text)
@@ -78,16 +78,20 @@ async def publish_rubric_post(bot, channel_key: str):
             post_text, parsed = await generate_post(topic, channel_key, rubric)
             print(f"✅ Текст готов ({len(post_text)} символов)")
 
-            print("🎨 Создаю визуал...")
-            image_path = await generate_image(parsed, channel_key)
-
-            tg_text = post_text[:1020] + "..." if len(post_text) > 1024 else post_text
-
-            if image_path and os.path.exists(image_path):
-                photo = FSInputFile(image_path)
-                await bot.send_photo(profile["telegram_channel"], photo, caption=tg_text)
+            # Логика: длинный → без фото, короткий → с фото
+            image_path = None
+            if len(post_text) <= 1024:
+                print(f"🎨 Текст короткий ({len(post_text)}) — создаю карточку")
+                image_path = await generate_image(parsed, channel_key)
+                if image_path and os.path.exists(image_path):
+                    photo = FSInputFile(image_path)
+                    await bot.send_photo(profile["telegram_channel"], photo, caption=post_text)
+                else:
+                    await bot.send_message(profile["telegram_channel"], post_text)
             else:
-                await bot.send_message(profile["telegram_channel"], tg_text)
+                print(f"📝 Текст длинный ({len(post_text)}) — публикую без фото")
+                await bot.send_message(profile["telegram_channel"], post_text)
+
             print(f"🎉 Пост опубликован в Telegram")
             increment_post_count()
 
