@@ -72,11 +72,14 @@ async def _smart_call(prompt, temperature=0.85):
 
 
 # ============================================================
-# ПАРСИНГ СТРУКТУРЫ
+# ПАРСИНГ СТРУКТУРЫ (с блоком ПОДРОБНЕЕ)
 # ============================================================
 
 def parse_post_structure(text):
-    result = {"title": "", "intro": "", "bullets": [], "question": "", "hashtags": ""}
+    result = {
+        "title": "", "intro": "", "details": "",
+        "bullets": [], "question": "", "hashtags": ""
+    }
     for line in text.split("\n"):
         line = line.strip()
         if not line:
@@ -86,6 +89,8 @@ def parse_post_structure(text):
             result["title"] = line.split(":", 1)[1].strip() if ":" in line else ""
         elif u.startswith("ВСТУПЛЕНИЕ"):
             result["intro"] = line.split(":", 1)[1].strip() if ":" in line else ""
+        elif u.startswith("ПОДРОБНЕЕ"):
+            result["details"] = line.split(":", 1)[1].strip() if ":" in line else ""
         elif u.startswith("ПУНКТ"):
             if ":" in line:
                 result["bullets"].append(line.split(":", 1)[1].strip())
@@ -97,13 +102,20 @@ def parse_post_structure(text):
 
 
 def build_post_text(p):
+    """Собирает текст для Telegram/VK с блоком ПОДРОБНЕЕ."""
     parts = []
-    if p["title"]: parts.append(p["title"])
-    if p["intro"]: parts.append(p["intro"])
+    if p["title"]:
+        parts.append(p["title"])
+    if p["intro"]:
+        parts.append(p["intro"])
+    if p["details"]:
+        parts.append(p["details"])
     if p["bullets"]:
         parts.append("\n".join([f"{i}. {b}" for i, b in enumerate(p["bullets"][:3], 1)]))
-    if p["question"]: parts.append(p["question"])
-    if p["hashtags"]: parts.append(p["hashtags"])
+    if p["question"]:
+        parts.append(p["question"])
+    if p["hashtags"]:
+        parts.append(p["hashtags"])
     return "\n\n".join(parts)
 
 
@@ -152,7 +164,7 @@ async def generate_ideas(channel_key, count=5):
 
 
 # ============================================================
-# ГЕНЕРАЦИЯ ПОСТА
+# ГЕНЕРАЦИЯ ПОСТА (с блоком ПОДРОБНЕЕ)
 # ============================================================
 
 async def generate_post(topic, channel_key, rubric=None):
@@ -169,21 +181,29 @@ async def generate_post(topic, channel_key, rubric=None):
 
 Напиши пост на тему: {topic}
 
-ФОРМАТ ОТВЕТА СТРОГО:
+ФОРМАТ ОТВЕТА СТРОГО (каждая строка — отдельное поле):
+
 ЗАГОЛОВОК: [цепляющий заголовок БЕЗ эмодзи, до 55 символов]
 ВСТУПЛЕНИЕ: [1–2 предложения, до 180 символов]
-ПУНКТ 1: [совет БЕЗ эмодзи, до 55 символов]
-ПУНКТ 2: [совет БЕЗ эмодзи, до 55 символов]
-ПУНКТ 3: [совет БЕЗ эмодзи, до 55 символов]
-ВОПРОС: [вопрос к читателям, до 70 символов]
-ХЕШТЕГИ: [4 хештега через пробел]"""
+ПОДРОБНЕЕ: [2–3 предложения раскрывающих тему, 250–350 символов]
+ПУНКТ 1: [совет БЕЗ эмодзи, до 70 символов]
+ПУНКТ 2: [совет БЕЗ эмодзи, до 70 символов]
+ПУНКТ 3: [совет БЕЗ эмодзи, до 70 символов]
+ВОПРОС: [вопрос к читателям, до 80 символов]
+ХЕШТЕГИ: [4 хештега через пробел]
+
+ВАЖНО:
+- Поле ПОДРОБНЕЕ — это 2–3 полноценных предложения, раскрывающих суть.
+- Общая длина поста: 700–900 символов.
+- Без эмодзи в заголовке и пунктах.
+- Без кликбейта и паники."""
 
     raw = await _smart_call(prompt)
     parsed = parse_post_structure(raw)
 
     if not parsed["title"] or len(parsed["bullets"]) < 2:
         print("   ⚠️ AI вернул неструктурированный текст")
-        return raw, {"title": topic, "bullets": [], "intro": "", "question": "", "hashtags": ""}
+        return raw, {"title": topic, "bullets": [], "intro": "", "details": "", "question": "", "hashtags": ""}
 
     return build_post_text(parsed), parsed
 
@@ -266,12 +286,10 @@ def _wrap_text(text, font, max_width, draw):
 
 
 def _remove_emoji(text):
-    """Убирает эмодзи и проблемные символы."""
     return re.sub(r'[^\w\s\d\.,!?\-:;()«»"\']', '', text).strip()
 
 
 async def _get_ai_background(topic, channel_key):
-    """Скачивает атмосферный AI-фон (без текста, без людей)."""
     topic_clean = _remove_emoji(topic)[:80]
 
     if channel_key == "cyber":
@@ -309,18 +327,13 @@ async def _get_ai_background(topic, channel_key):
 
 
 def _overlay_text_on_bg(bg_img, parsed, channel_key):
-    """Накладывает текст поверх AI-фона."""
     W, H = 1080, 1080
     bg = bg_img.resize((W, H)).convert("RGB")
 
-    # Затемняющие плашки
     overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     ov_draw = ImageDraw.Draw(overlay)
-    # Верхняя плашка (заголовок)
     ov_draw.rectangle([0, 0, W, 420], fill=(0, 0, 0, 170))
-    # Нижняя плашка (пункты + бренд)
     ov_draw.rectangle([0, H - 560, W, H], fill=(0, 0, 0, 190))
-    # Плашка под бренд (правый нижний угол — перекрывает pollinations.ai)
     ov_draw.rectangle([W - 500, H - 90, W, H], fill=(0, 0, 0, 240))
 
     bg = Image.alpha_composite(bg.convert("RGBA"), overlay).convert("RGB")
@@ -340,7 +353,6 @@ def _overlay_text_on_bg(bg_img, parsed, channel_key):
 
     pad = 60
 
-    # === ЗАГОЛОВОК (без эмодзи) ===
     title = _remove_emoji(parsed.get("title", "Без заголовка"))
     if not title:
         title = "Без заголовка"
@@ -352,7 +364,6 @@ def _overlay_text_on_bg(bg_img, parsed, channel_key):
         draw.text((pad, y), line, font=font_title, fill=(255, 255, 255))
         y += 74
 
-    # === ПУНКТЫ ===
     bullets = parsed.get("bullets", [])[:3]
     if not bullets:
         bullets = ["Подробности в посте", "Читай ниже", "Подпишись на канал"]
@@ -363,7 +374,6 @@ def _overlay_text_on_bg(bg_img, parsed, channel_key):
         if not bullet_clean:
             bullet_clean = "..."
 
-        # Кружок с цифрой
         cx, cy = pad + 26, y + 26
         draw.ellipse([cx - 26, cy - 26, cx + 26, cy + 26], fill=accent)
         num = str(i)
@@ -374,7 +384,6 @@ def _overlay_text_on_bg(bg_img, parsed, channel_key):
             nw, nh = 12, 20
         draw.text((cx - nw // 2, cy - nh // 2 - 5), num, font=font_num, fill=(0, 0, 0))
 
-        # Текст пункта
         for line in _wrap_text(bullet_clean, font_bullet, W - 2 * pad - 80, draw)[:2]:
             draw.text((pad + 80, y), line, font=font_bullet, fill=(0, 0, 0),
                       stroke_width=3, stroke_fill=(0, 0, 0))
@@ -382,14 +391,12 @@ def _overlay_text_on_bg(bg_img, parsed, channel_key):
             y += 50
         y += 14
 
-    # === БРЕНД (с тёмной подложкой) ===
     draw.text((W - 440, H - 65), brand, font=font_brand, fill=accent)
 
     return bg
 
 
 async def generate_image(parsed, channel_key="cyber"):
-    """AI-фон + наложение текста."""
     try:
         print(f"   🎨 Скачиваю AI-фон...")
         bg = await _get_ai_background(parsed.get("title", ""), channel_key)
