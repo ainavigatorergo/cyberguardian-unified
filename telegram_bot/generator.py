@@ -22,10 +22,6 @@ os.makedirs(IMAGES_DIR, exist_ok=True)
 USED_TOPICS_FILE = os.path.join(DATA_DIR, "used_topics.json")
 
 
-# ============================================================
-# ХРАНЕНИЕ ТЕМ
-# ============================================================
-
 def load_used_topics():
     if not os.path.exists(USED_TOPICS_FILE):
         return {"cyber": [], "ai": []}
@@ -40,10 +36,6 @@ def save_used_topics(data):
     with open(USED_TOPICS_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-
-# ============================================================
-# API
-# ============================================================
 
 async def _call_api(url, api_key, model, prompt, temperature=0.85):
     async with aiohttp.ClientSession() as session:
@@ -71,13 +63,9 @@ async def _smart_call(prompt, temperature=0.85):
     raise Exception("Все модели недоступны")
 
 
-# ============================================================
-# ПАРСИНГ СТРУКТУРЫ (с блоком ПОДРОБНЕЕ)
-# ============================================================
-
 def parse_post_structure(text):
     result = {
-        "title": "", "intro": "", "details": "",
+        "title": "", "intro": "", "details": "", "bonus": "",
         "bullets": [], "question": "", "hashtags": ""
     }
     for line in text.split("\n"):
@@ -91,6 +79,8 @@ def parse_post_structure(text):
             result["intro"] = line.split(":", 1)[1].strip() if ":" in line else ""
         elif u.startswith("ПОДРОБНЕЕ"):
             result["details"] = line.split(":", 1)[1].strip() if ":" in line else ""
+        elif u.startswith("БОНУС"):
+            result["bonus"] = line.split(":", 1)[1].strip() if ":" in line else ""
         elif u.startswith("ПУНКТ"):
             if ":" in line:
                 result["bullets"].append(line.split(":", 1)[1].strip())
@@ -102,7 +92,6 @@ def parse_post_structure(text):
 
 
 def build_post_text(p):
-    """Собирает текст для Telegram/VK с блоком ПОДРОБНЕЕ."""
     parts = []
     if p["title"]:
         parts.append(p["title"])
@@ -112,16 +101,14 @@ def build_post_text(p):
         parts.append(p["details"])
     if p["bullets"]:
         parts.append("\n".join([f"{i}. {b}" for i, b in enumerate(p["bullets"][:3], 1)]))
+    if p["bonus"]:
+        parts.append(f"💡 {p['bonus']}")
     if p["question"]:
         parts.append(p["question"])
     if p["hashtags"]:
         parts.append(p["hashtags"])
     return "\n\n".join(parts)
 
-
-# ============================================================
-# УНИКАЛЬНОСТЬ ТЕМ
-# ============================================================
 
 async def is_topic_unique(topic, channel_key):
     used = load_used_topics().get(channel_key, [])
@@ -141,18 +128,12 @@ async def is_topic_unique(topic, channel_key):
         return True
 
 
-# ============================================================
-# ГЕНЕРАЦИЯ ИДЕЙ
-# ============================================================
-
 async def generate_ideas(channel_key, count=5):
     profile = CHANNELS[channel_key]
     used = load_used_topics().get(channel_key, [])
     used_str = ", ".join(used[-20:]) if used else "пока ничего"
-    context = (
-        "Ниша: кибербезопасность." if channel_key == "cyber"
-        else "Ниша: нейросети для бизнеса."
-    )
+    context = ("Ниша: кибербезопасность." if channel_key == "cyber"
+               else "Ниша: нейросети для бизнеса.")
     prompt = f"""Ты — контент-стратег канала «{profile['name']}».
 {context}
 Уже использовано: {used_str}
@@ -164,63 +145,110 @@ async def generate_ideas(channel_key, count=5):
 
 
 # ============================================================
-# ГЕНЕРАЦИЯ ПОСТА (с блоком ПОДРОБНЕЕ)
+# ГЛАВНОЕ: ОЧЕЛОВЕЧЕННАЯ ГЕНЕРАЦИЯ ПОСТА
 # ============================================================
 
 async def generate_post(topic, channel_key, rubric=None):
     profile = CHANNELS[channel_key]
-    extra = ("Тон: спокойный, экспертный, без паники."
-             if channel_key == "cyber"
-             else "Тон: дружелюбный, практичный, с примерами.")
+    author = profile["author"]
+
     rubric_block = f"Рубрика: {rubric['name']}. Задача: {rubric['task']}" if rubric else ""
 
     prompt = f"""{profile['prompt_prefix']}
-Стиль: {profile['style']}
-Особенности: {extra}
+
+О тебе:
+- Тебя зовут {author['name']}
+- Ты {author['role']}
+- Опыт: {author['experience']}
+- Стиль: {author['style']}
+- Личная нота: {author['personal_touch']}
+
 {rubric_block}
 
 Напиши пост на тему: {topic}
 
-ФОРМАТ ОТВЕТА СТРОГО (каждая строка — отдельное поле):
+=== ГЛАВНЫЕ ПРАВИЛА (ОЧЕНЬ ВАЖНО) ===
 
-ЗАГОЛОВОК: [цепляющий заголовок БЕЗ эмодзи, до 55 символов]
-ВСТУПЛЕНИЕ: [1–2 предложения, до 180 символов]
-ПОДРОБНЕЕ: [2–3 предложения раскрывающих тему, 250–350 символов]
-ПУНКТ 1: [совет БЕЗ эмодзи, до 70 символов]
-ПУНКТ 2: [совет БЕЗ эмодзи, до 70 символов]
-ПУНКТ 3: [совет БЕЗ эмодзи, до 70 символов]
-ВОПРОС: [вопрос к читателям, до 80 символов]
+1. ПИШИ ОТ ПЕРВОГО ЛИЦА. Используй «я», «мне», «по моему опыту», «я считаю».
+   Плохо: «Специалисты рекомендуют...»
+   Хорошо: «Я всегда советую...», «По моему опыту...»
+
+2. ДОБАВЬ ЛИЧНУЮ ИСТОРИЮ или пример из жизни.
+   Например: «Помню, как мой знакомый попался на похожую уловку...»
+   История короткая (1–2 предложения), правдоподобная.
+
+3. ВЫРАЖАЙ ЛИЧНОЕ МНЕНИЕ.
+   Например: «На мой взгляд, это самая недооценённая угроза», «Я считаю, что 2FA — это минимум».
+
+4. ИСПОЛЬЗУЙ РАЗГОВОРНЫЕ ОБОРОТЫ: «короче», «по сути», «честно говоря», «вот смотрите», «ну и конечно».
+
+5. ДОБАВЬ ЛЁГКУЮ ИРОНИЮ или юмор, если уместно.
+   Например: «Пароль qwerty123 — это как замок, который открывается от взгляда».
+   НЕ ПЕРЕИГРЫВАЙ.
+
+6. ЗАПРЕЩЕНЫ ШАБЛОННЫЕ ФРАЗЫ:
+   - «Важно отметить...»
+   - «В современном мире...»
+   - «Следует подчеркнуть...»
+   - «Необходимо учитывать...»
+   - «Ключевой момент...»
+   - «На сегодняшний день...»
+
+7. ЗАПРЕЩЕНЫ ОБОБЩЕНИЯ без конкретики:
+   Плохо: «Многие компании страдают от атак»
+   Хорошо: «В прошлом году моя знакомая компания потеряла 2 млн из-за одной фишинговой рассылки»
+
+=== ФОРМАТ ОТВЕТА СТРОГО ===
+
+ЗАГОЛОВОК: [цепляющий заголовок БЕЗ эмодзи, до 60 символов]
+ВСТУПЛЕНИЕ: [2 предложения от первого лица, 200–250 символов]
+ПОДРОБНЕЕ: [3–4 предложения с личным мнением и примером, 400–500 символов]
+ПУНКТ 1: [совет БЕЗ эмодзи, до 80 символов]
+ПУНКТ 2: [совет БЕЗ эмодзи, до 80 символов]
+ПУНКТ 3: [совет БЕЗ эмодзи, до 80 символов]
+БОНУС: [1–2 предложения — личный совет от тебя, 150–200 символов]
+ВОПРОС: [вопрос к читателям, до 90 символов, как будто ты спрашиваешь у друзей]
 ХЕШТЕГИ: [4 хештега через пробел]
 
 ВАЖНО:
-- Поле ПОДРОБНЕЕ — это 2–3 полноценных предложения, раскрывающих суть.
-- Общая длина поста: 700–900 символов.
-- Без эмодзи в заголовке и пунктах.
-- Без кликбейта и паники."""
+- Общая длина: 1100–1300 символов.
+- Текст должен звучать как рассказ живого человека, а не как статья из Википедии.
+- Если сомневаешься — представь, что ты рассказываешь это другу за чашкой кофе."""
 
     raw = await _smart_call(prompt)
     parsed = parse_post_structure(raw)
 
     if not parsed["title"] or len(parsed["bullets"]) < 2:
         print("   ⚠️ AI вернул неструктурированный текст")
-        return raw, {"title": topic, "bullets": [], "intro": "", "details": "", "question": "", "hashtags": ""}
+        return raw, {"title": topic, "bullets": [], "intro": "", "details": "", "bonus": "", "question": "", "hashtags": ""}
 
     return build_post_text(parsed), parsed
 
 
 async def generate_longread(topic, channel_key, rubric=None):
     profile = CHANNELS[channel_key]
+    author = profile["author"]
     rubric_block = f"Рубрика: {rubric['name']}. Задача: {rubric['task']}" if rubric else ""
+
     prompt = f"""{profile['prompt_prefix']}
-Стиль: {profile['style']}
+
+О тебе:
+- Тебя зовут {author['name']}
+- Ты {author['role']}
+- Опыт: {author['experience']}
+
 {rubric_block}
+
 Напиши ГЛУБОКИЙ лонгрид на тему: {topic}
-Требования:
+
+ТРЕБОВАНИЯ:
 - 1800–2500 символов.
+- ОТ ПЕРВОГО ЛИЦА, с личными историями и мнениями.
 - Вступление, 3–4 раздела с <b>подзаголовками</b>, вывод.
-- 5–7 советов.
-- Вопрос к читателям.
-- 4 хештега."""
+- 5–7 практических советов.
+- Заверши вопросом к читателям.
+- 4 хештега.
+- Без шаблонных фраз («важно отметить», «в современном мире» и т.д.)."""
     return await _smart_call(prompt, temperature=0.8)
 
 
@@ -228,7 +256,7 @@ async def generate_poll(topic, channel_key):
     profile = CHANNELS[channel_key]
     prompt = f"""Канал «{profile['name']}». Придумай Telegram-опрос по теме: {topic}
 ФОРМАТ СТРОГО:
-ВОПРОС: [до 100 символов]
+ВОПРОС: [до 100 символов, как будто ты спрашиваешь у друзей]
 ВАРИАНТ: [вариант 1]
 ВАРИАНТ: [вариант 2]
 ВАРИАНТ: [вариант 3]"""
@@ -248,7 +276,7 @@ async def generate_poll(topic, channel_key):
 
 
 # ============================================================
-# ВИЗУАЛ: AI-фон + текстовая плашка
+# ВИЗУАЛ
 # ============================================================
 
 def _find_font(size, bold=False):
@@ -334,7 +362,7 @@ def _overlay_text_on_bg(bg_img, parsed, channel_key):
     ov_draw = ImageDraw.Draw(overlay)
     ov_draw.rectangle([0, 0, W, 420], fill=(0, 0, 0, 170))
     ov_draw.rectangle([0, H - 560, W, H], fill=(0, 0, 0, 190))
-    ov_draw.rectangle([W - 500, H - 90, W, H], fill=(0, 0, 0, 240))
+    ov_draw.rectangle([W - 500, H - 140, W, H], fill=(0, 0, 0, 255))
 
     bg = Image.alpha_composite(bg.convert("RGBA"), overlay).convert("RGB")
     draw = ImageDraw.Draw(bg)
@@ -391,7 +419,7 @@ def _overlay_text_on_bg(bg_img, parsed, channel_key):
             y += 50
         y += 14
 
-    draw.text((W - 440, H - 65), brand, font=font_brand, fill=accent)
+    draw.text((W - 440, H - 80), brand, font=font_brand, fill=accent)
 
     return bg
 
