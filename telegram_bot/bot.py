@@ -43,9 +43,7 @@ class PostFlow(StatesGroup):
 
 def bottom_menu():
     kb = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🏠 Главное меню")],
-        ],
+        keyboard=[[KeyboardButton(text="🏠 Главное меню")]],
         resize_keyboard=True,
         is_persistent=True,
         input_field_placeholder="Нажми «Главное меню»"
@@ -104,23 +102,23 @@ def approve_inline():
 
 
 async def _send_preview(chat_id, post_text, image_path, channel_key, reply_markup=None):
-    if len(post_text) > 1024:
-        post_text = post_text[:1020] + "..."
+    """Превью: длинный текст — без фото, короткий — с фото."""
     if reply_markup is None:
         reply_markup = approve_inline()
 
-    if image_path and not image_path.startswith("http") and os.path.exists(image_path):
+    if len(post_text) > 3900:
+        preview_text = post_text[:3900] + "..."
+    else:
+        preview_text = post_text
+
+    if image_path and os.path.exists(image_path) and len(post_text) <= 1024:
         photo = FSInputFile(image_path)
         await bot.send_photo(chat_id, photo,
-                             caption=f"📄 <b>Превью:</b>\n\n{post_text}",
-                             reply_markup=reply_markup)
-    elif image_path and image_path.startswith("http"):
-        await bot.send_photo(chat_id, image_path,
-                             caption=f"📄 <b>Превью:</b>\n\n{post_text}",
+                             caption=f"📄 <b>Превью:</b>\n\n{preview_text}",
                              reply_markup=reply_markup)
     else:
         await bot.send_message(chat_id,
-                               f"📄 <b>Превью:</b>\n\n{post_text}",
+                               f"📄 <b>Превью:</b>\n\n{preview_text}",
                                reply_markup=reply_markup)
 
 
@@ -382,14 +380,12 @@ async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
     profile = CHANNELS[channel_key]
 
     try:
-        tg_text = post_text[:1020] + "..." if len(post_text) > 1024 else post_text
-
-        # === Telegram ===
-        if image_path and os.path.exists(image_path):
+        # === Telegram: длинный → без фото, короткий → с фото ===
+        if image_path and os.path.exists(image_path) and len(post_text) <= 1024:
             photo = FSInputFile(image_path)
-            await bot.send_photo(profile["telegram_channel"], photo, caption=tg_text)
+            await bot.send_photo(profile["telegram_channel"], photo, caption=post_text)
         else:
-            await bot.send_message(profile["telegram_channel"], tg_text)
+            await bot.send_message(profile["telegram_channel"], post_text)
         increment_post_count()
         print(f"✅ Опубликовано в Telegram ({channel_key})")
 
@@ -405,7 +401,7 @@ async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
         if vk_result:
             result_msg = f"🎉 Опубликовано в <b>Telegram + VK</b> ({profile['name']})"
         else:
-            result_msg = f"⚠️ Telegram — OK, VK — ошибка. Проверь логи Render."
+            result_msg = f"⚠️ Telegram — OK, VK — ошибка."
 
         await callback.message.answer(result_msg, reply_markup=main_menu())
 
@@ -417,7 +413,7 @@ async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# === ПУБЛИКАЦИЯ ТОЛЬКО В TG ===
+# === ПУБЛИКАЦИЯ ТОЛЬКО TG ===
 @dp.callback_query(F.data == "approve_publish_tg", PostFlow.approving)
 async def approve_publish_tg(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -427,15 +423,12 @@ async def approve_publish_tg(callback: types.CallbackQuery, state: FSMContext):
     profile = CHANNELS[channel_key]
 
     try:
-        tg_text = post_text[:1020] + "..." if len(post_text) > 1024 else post_text
-
-        if image_path and os.path.exists(image_path):
+        if image_path and os.path.exists(image_path) and len(post_text) <= 1024:
             photo = FSInputFile(image_path)
-            await bot.send_photo(profile["telegram_channel"], photo, caption=tg_text)
+            await bot.send_photo(profile["telegram_channel"], photo, caption=post_text)
         else:
-            await bot.send_message(profile["telegram_channel"], tg_text)
+            await bot.send_message(profile["telegram_channel"], post_text)
         increment_post_count()
-        print(f"✅ Опубликовано в Telegram ({channel_key}) — без VK")
 
         try:
             await callback.message.delete()
