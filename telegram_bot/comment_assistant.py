@@ -14,51 +14,32 @@ DEFAULT_ADMIN_CHAT_ID = 5053770400
 PROVOD_URL = "https://api.provod.ai/v1/chat/completions"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-PROVOD_MODELS = ["gemini-3.5-flash", "gemini-2.5-flash"]
+PROVOD_MODELS = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-flash-latest"]
 OPENROUTER_MODELS = [
     "meta-llama/llama-3.3-70b-instruct:free",
     "google/gemma-3-12b-it:free",
 ]
 
-# === ЧЁРНЫЙ СПИСОК (точное совпадение юзернейма) ===
+# === ЧЁРНЫЙ СПИСОК (юзернеймы И названия) ===
 BLACKLIST = [
-    "cisoclub",
-    "true_security",
-    "true_sec",
-    "infosec",
-    "kiber_bez",
-    "chatgpt_ru",
-    "gpt_chat_ru",
-    "ai_startups",
-    "claude_ru",
-    "gemini_ru",
-    "chatgpt_ru_official",
-    "security_alert",
-    "cybersecurity_ru",
-    "seeallochnaya",
-    "syoloshchnaya",
-    "ai_for_business",
-    "data_security_ru",
-    "itsec_news",
-    "gpt4_ru",
-    "ai_daily",
-    "machinelearning",       # добавлено
-    "machinelearning_ru",    # добавлено
-    "machine_learning_news", # добавлено
+    # Юзернеймы
+    "cisoclub", "true_security", "true_sec", "infosec", "kiber_bez",
+    "chatgpt_ru", "gpt_chat_ru", "ai_startups", "claude_ru", "gemini_ru",
+    "chatgpt_ru_official", "security_alert", "cybersecurity_ru",
+    "seeallochnaya", "syoloshchnaya", "ai_for_business", "data_security_ru",
+    "itsec_news", "gpt4_ru", "ai_daily", "machinelearning",
+    "machinelearning_ru", "machine_learning_news", "neural_networks",
+    "neuro_ru", "neuro_channel", "нейросети",
+    # Названия каналов
+    "нейронные сети о нейронных сетях",
+    "нейронные сети",
 ]
 
-# === СЛУЖЕБНЫЕ ФРАЗЫ ===
 SERVICE_PHRASES = [
-    "channel created",
-    "channel name was changed",
-    "channel photo changed",
-    "channel description changed",
-    "channel pinned",
-    "channel is available for purchase",
-    "available for purchase",
-    "канал создан",
-    "название канала изменено",
-    "описание канала изменено",
+    "channel created", "channel name was changed", "channel photo changed",
+    "channel description changed", "channel pinned",
+    "channel is available for purchase", "available for purchase",
+    "канал создан", "название канала изменено", "описание канала изменено",
     "канал доступен для покупки",
 ]
 
@@ -73,7 +54,7 @@ SEARCH_KEYWORDS = {
         "нейросети", "нейросеть", "AI", "artificial intelligence", "ChatGPT",
         "машинное обучение", "AI для бизнеса",
         "автоматизация", "промпты", "Midjourney", "GPT", "LLM",
-        "искусственный интеллект", "нейронные сети", "OpenAI",
+        "искусственный интеллект", "OpenAI",
     ],
 }
 
@@ -89,10 +70,10 @@ SEED_CHANNELS = {
         "cyber_ru", "security_news_ru", "infosecurity",
     ],
     "ai": [
-        "ai_news_ru", "neural_networks", "gpt_ru", "ai_art_ru",
-        "openai_ru", "data_secrets", "aiconference", "neuro_ru",
+        "ai_news_ru", "gpt_ru", "ai_art_ru",
+        "openai_ru", "data_secrets", "aiconference",
         "midjourney_ru", "dl_ru",
-        "deep_learning_ru", "prompt_engineering", "neuro_channel",
+        "deep_learning_ru", "prompt_engineering",
         "ai_machinelearning_big_data", "ai_discussions", "llm_ru",
         "ai_tools_ru", "neuro_news", "ai_practice", "gpt_news_ru",
         "ai_technologies", "neural_networks_ru",
@@ -138,12 +119,18 @@ def _normalize(s: str) -> str:
 
 def is_blacklisted(channel: str) -> bool:
     ch = _normalize(channel)
-    return ch in [_normalize(b) for b in BLACKLIST]
+    for b in BLACKLIST:
+        if ch == _normalize(b):
+            return True
+    return False
 
 
 def is_title_blacklisted(title: str) -> bool:
     t = _normalize(title)
-    return t in [_normalize(b) for b in BLACKLIST]
+    for b in BLACKLIST:
+        if t == _normalize(b):
+            return True
+    return False
 
 
 def is_service_post(text: str) -> bool:
@@ -290,7 +277,7 @@ async def discover_channels(channel_key, max_new=3):
         checked += 1
 
         if is_blacklisted(ch):
-            print(f"   🚫 {ch} — в чёрном списке")
+            print(f"   🚫 {ch} — в чёрном списке (юзернейм)")
             continue
 
         info = await _check_channel_web_preview(ch)
@@ -298,7 +285,7 @@ async def discover_channels(channel_key, max_new=3):
             continue
 
         if is_title_blacklisted(info.get("title", "")):
-            print(f"   🚫 {ch} — название в чёрном списке")
+            print(f"   🚫 {ch} — в чёрном списке (название: {info.get('title', '')})")
             continue
 
         if not info.get("last_post"):
@@ -383,7 +370,7 @@ async def send_daily_digest(bot):
                 print(f"⚠️ Ошибка отправки: {e}")
 
     try:
-                await bot.send_message(target, "✅ Дайджест завершён")
+        await bot.send_message(target, "✅ Дайджест завершён")
     except:
         pass
 
