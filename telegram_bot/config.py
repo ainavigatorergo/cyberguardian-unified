@@ -123,5 +123,8 @@ RUBRICS_AI = {
         "task": "Свободная тема из мира AI."},
 }
 
+# === ДЛЯ ОБРАТНОЙ СОВМЕСТИМОСТИ С generator.py ===
+RUBRICS = RUBRICS_CYBER
+
 DEFAULT_SCHEDULE = ["10:00", "19:00"]
 TIMEZONE = "Europe/Moscow"
