@@ -4,7 +4,7 @@ from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiogram.types import FSInputFile
 
-from config import CHANNELS, DATA_DIR, RUBRICS
+from config import CHANNELS, DATA_DIR, RUBRICS_CYBER, RUBRICS_AI
 from generator import (
     generate_post, generate_image, generate_longread,
     generate_poll, is_topic_unique, load_used_topics, save_used_topics,
@@ -20,8 +20,14 @@ scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 async def publish_rubric_post(bot, channel_key: str):
     profile = CHANNELS[channel_key]
     emoji = "🔐" if channel_key == "cyber" else "🤖"
+
     weekday = datetime.now().weekday()
-    rubric = RUBRICS.get(weekday, RUBRICS[6])
+
+    # === РАЗНЫЕ РУБРИКИ ДЛЯ КАЖДОГО КАНАЛА ===
+    if channel_key == "cyber":
+        rubric = RUBRICS_CYBER.get(weekday, RUBRICS_CYBER[6])
+    else:
+        rubric = RUBRICS_AI.get(weekday, RUBRICS_AI[6])
 
     print(f"\n{emoji} === Публикация: {channel_key} | {rubric['name']} ===")
 
@@ -125,3 +131,5 @@ def start_scheduler(bot):
 
     scheduler.start()
     print("✅ Планировщик запущен")
+    print("   cyber: 10/19 МСК, ai: 11/20 МСК")
+    print("   статистика: 23:00, отчёт: вс 20:00, мониторинг: каждый час")
