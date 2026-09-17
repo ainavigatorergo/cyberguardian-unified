@@ -23,29 +23,46 @@ async def _publish_vk_delayed(channel_key, post_text, image_path, tg_message_id)
         print(f"⏳ VK через 5 минут...")
         await asyncio.sleep(300)
 
+        print(f"📝 Генерирую VK-версию...")
         vk_text = await generate_vk_version(post_text, channel_key)
+        print(f"✅ VK-версия: {len(vk_text)} символов")
 
-        # Если карточки нет — генерируем для VK
+        # Карточка для VK: используем ту же, что в TG. Если нет — генерируем.
         if not image_path or not os.path.exists(image_path):
-            print("🎨 Генерирую карточку для VK...")
+            print(f"🎨 Карточки нет, генерирую новую для VK...")
             first_line = vk_text.split("\n")[0][:60] if vk_text else channel_key
             parsed_vk = {"title": first_line, "bullets": [], "intro": "",
                          "details": "", "bonus": "", "question": "", "hashtags": ""}
             image_path = await generate_image(parsed_vk, channel_key)
+            print(f"🎨 Карточка для VK: {image_path}")
+        else:
+            print(f"📷 Использую карточку из TG: {image_path}")
 
+        # Ссылка на пост в TG
         tg_link_base = TG_LINKS.get(channel_key, "")
         if tg_link_base and tg_message_id:
             vk_text = vk_text.rstrip() + f"\n\n👉 Продолжение: {tg_link_base}/{tg_message_id}"
 
+        # Добавляем хештеги — только если их ещё нет
         brand_tag = "#CyberGuardianSec" if channel_key == "cyber" else "#AINavigator"
         general = "#кибербезопасность" if channel_key == "cyber" else "#нейросети"
-        vk_text = vk_text.rstrip() + f"\n\n{brand_tag} {general}"
 
-        tg_mention = "t.me/CyberGuardianSec" if channel_key == "cyber" else "t.me/ainavigatorErgo"
-        vk_text = vk_text.rstrip() + f"\n📢 Подписаться: {tg_mention}"
+        tags_to_add = []
+        vk_lower = vk_text.lower()
+        if brand_tag.lower() not in vk_lower:
+            tags_to_add.append(brand_tag)
+        if general.lower() not in vk_lower:
+            tags_to_add.append(general)
 
-        await publish_to_vk(channel_key, vk_text, image_path)
-        print(f"✅ VK опубликовано ({channel_key})")
+        if tags_to_add:
+            vk_text = vk_text.rstrip() + f"\n\n{' '.join(tags_to_add)}"
+
+        print(f"📤 Публикую в VK (фото: {bool(image_path and os.path.exists(image_path))})...")
+        result = await publish_to_vk(channel_key, vk_text, image_path)
+        if result:
+            print(f"✅ VK опубликовано ({channel_key})")
+        else:
+            print(f"⚠️ VK вернул False")
     except Exception as e:
         print(f"⚠️ VK ошибка: {e}")
 
@@ -103,9 +120,10 @@ async def publish_rubric_post(bot, channel_key: str):
             post_text, parsed = await generate_post(topic, channel_key, rubric)
             print(f"✅ Текст: {len(post_text)} символов")
 
-            # Карточку генерируем ВСЕГДА — она нужна для VK
+            # Карточку генерируем ВСЕГДА — она нужна и для TG, и для VK
             print("🎨 Создаю карточку...")
             image_path = await generate_image(parsed, channel_key)
+            print(f"🎨 Карточка: {image_path}")
 
             tg_message = None
             if len(post_text) <= 1024 and image_path and os.path.exists(image_path):
