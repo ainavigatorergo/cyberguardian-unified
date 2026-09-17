@@ -18,19 +18,32 @@ scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 
 
 async def _publish_vk_delayed(channel_key, post_text, image_path, tg_message_id):
-    """VK с задержкой 5 минут + ссылка на пост TG + хештеги + упоминание."""
+    """VK через 5 минут: короткая версия + карточка + ссылка на TG-пост."""
     try:
         print(f"⏳ VK через 5 минут...")
         await asyncio.sleep(300)
+
         vk_text = await generate_vk_version(post_text, channel_key)
+
+        # Если карточки нет — генерируем для VK
+        if not image_path or not os.path.exists(image_path):
+            print("🎨 Генерирую карточку для VK...")
+            first_line = vk_text.split("\n")[0][:60] if vk_text else channel_key
+            parsed_vk = {"title": first_line, "bullets": [], "intro": "",
+                         "details": "", "bonus": "", "question": "", "hashtags": ""}
+            image_path = await generate_image(parsed_vk, channel_key)
+
         tg_link_base = TG_LINKS.get(channel_key, "")
         if tg_link_base and tg_message_id:
             vk_text = vk_text.rstrip() + f"\n\n👉 Продолжение: {tg_link_base}/{tg_message_id}"
+
         brand_tag = "#CyberGuardianSec" if channel_key == "cyber" else "#AINavigator"
         general = "#кибербезопасность" if channel_key == "cyber" else "#нейросети"
         vk_text = vk_text.rstrip() + f"\n\n{brand_tag} {general}"
+
         tg_mention = "t.me/CyberGuardianSec" if channel_key == "cyber" else "t.me/ainavigatorErgo"
         vk_text = vk_text.rstrip() + f"\n📢 Подписаться: {tg_mention}"
+
         await publish_to_vk(channel_key, vk_text, image_path)
         print(f"✅ VK опубликовано ({channel_key})")
     except Exception as e:
@@ -90,15 +103,14 @@ async def publish_rubric_post(bot, channel_key: str):
             post_text, parsed = await generate_post(topic, channel_key, rubric)
             print(f"✅ Текст: {len(post_text)} символов")
 
-            image_path = None
+            # Карточку генерируем ВСЕГДА — она нужна для VK
+            print("🎨 Создаю карточку...")
+            image_path = await generate_image(parsed, channel_key)
+
             tg_message = None
-            if len(post_text) <= 1024:
-                image_path = await generate_image(parsed, channel_key)
-                if image_path and os.path.exists(image_path):
-                    photo = FSInputFile(image_path)
-                    tg_message = await bot.send_photo(profile["telegram_channel"], photo, caption=post_text)
-                else:
-                    tg_message = await bot.send_message(profile["telegram_channel"], post_text)
+            if len(post_text) <= 1024 and image_path and os.path.exists(image_path):
+                photo = FSInputFile(image_path)
+                tg_message = await bot.send_photo(profile["telegram_channel"], photo, caption=post_text)
             else:
                 tg_message = await bot.send_message(profile["telegram_channel"], post_text)
             increment_post_count()
