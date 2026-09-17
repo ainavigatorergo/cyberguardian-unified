@@ -86,7 +86,13 @@ def parse_post_structure(text):
         elif u.startswith("БОНУС"):
             result["bonus"] = line.split(":", 1)[1].strip() if ":" in line else ""
         elif u.startswith("ПУНКТ") or u.startswith("СОВЕТ"):
-            if ":" in line: result["bullets"].append(line.split(":", 1)[1].strip())
+            if ":" in line:
+                bullet = line.split(":", 1)[1].strip()
+                # Убираем префиксы "1. ", "2) ", "- ", "• " и т.п.
+                bullet = re.sub(r'^\d+[\.\)]\s*', '', bullet)
+                bullet = re.sub(r'^[-•—]\s*', '', bullet)
+                if bullet:
+                    result["bullets"].append(bullet)
         elif u.startswith("ВОПРОС"):
             result["question"] = line.split(":", 1)[1].strip() if ":" in line else ""
         elif u.startswith("ХЕШТЕГ"):
@@ -214,12 +220,14 @@ async def generate_post(topic, channel_key, rubric=None):
 ЗАГОЛОВОК: [до 60 символов, без эмодзи]
 ВСТУПЛЕНИЕ: [2 предложения с хуком, 200–250 символов]
 ПОДРОБНЕЕ: [3–4 предложения, 350–450 символов]
-ПУНКТ 1: [до 80 символов]
-ПУНКТ 2: [до 80 символов]
-ПУНКТ 3: [до 80 символов]
+ПУНКТ 1: [до 80 символов, БЕЗ цифры в начале]
+ПУНКТ 2: [до 80 символов, БЕЗ цифры в начале]
+ПУНКТ 3: [до 80 символов, БЕЗ цифры в начале]
 БОНУС: [150–200 символов, личный совет]
 ВОПРОС: [интерактив, до 90 символов]
 ХЕШТЕГИ: [10–15 через пробел]
+
+ВАЖНО: в пунктах НЕ ставь нумерацию "1.", "2.", "3." — только сам текст.
 
 ХЕШТЕГИ:
 Фиксированные: {fixed_tags_str}
