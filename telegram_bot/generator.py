@@ -88,7 +88,6 @@ def parse_post_structure(text):
         elif u.startswith("ПУНКТ") or u.startswith("СОВЕТ"):
             if ":" in line:
                 bullet = line.split(":", 1)[1].strip()
-                # Убираем префиксы "1. ", "2) ", "- ", "• " и т.п.
                 bullet = re.sub(r'^\d+[\.\)]\s*', '', bullet)
                 bullet = re.sub(r'^[-•—]\s*', '', bullet)
                 if bullet:
@@ -259,6 +258,7 @@ async def generate_post(topic, channel_key, rubric=None):
 
 
 async def generate_vk_version(post_text, channel_key):
+    """Короткая версия для VK. БЕЗ ссылок — их добавит код."""
     prompt = f"""Сократи пост для VK. Аудитория VK не читает длинные тексты.
 
 Исходный пост:
@@ -266,12 +266,17 @@ async def generate_vk_version(post_text, channel_key):
 
 ТРЕБОВАНИЯ:
 1. Длина: 300–500 символов.
-2. ХУК в первой строке.
+2. ХУК в первой строке (самое важное — сразу).
 3. 3–5 хештегов (не больше).
 4. Сохрани главную мысль и эмоцию.
 5. В конце — вопрос к читателям.
 
-Формат ответа — только готовый текст."""
+КРИТИЧНО ВАЖНО:
+- НЕ вставляй ссылки на каналы, Telegram, t.me и т.п. — я добавлю их сам.
+- НЕ вставляй название канала (@...).
+- Только текст поста и хештеги.
+
+Формат ответа — только готовый текст поста."""
     try:
         return await _smart_call(prompt, temperature=0.7)
     except Exception as e:
