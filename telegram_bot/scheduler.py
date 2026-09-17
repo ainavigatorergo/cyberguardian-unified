@@ -17,33 +17,35 @@ from vk_publisher import publish_to_vk
 scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 
 
-async def _publish_vk_delayed(channel_key, post_text, image_path, tg_message_id):
-    """VK через 5 минут: короткая версия + карточка + ссылка на TG-пост."""
+async def _publish_vk(channel_key, post_text, image_path, tg_message_id):
+    """VK сразу после TG: короткая версия + карточка + ссылка на TG-пост."""
     try:
-        print(f"⏳ VK через 5 минут...")
-        await asyncio.sleep(300)
+        print(f"\n⏳ [VK] Начинаю публикацию ({channel_key})...")
 
-        print(f"📝 Генерирую VK-версию...")
+        print(f"📝 [VK] Генерирую VK-версию...")
         vk_text = await generate_vk_version(post_text, channel_key)
-        print(f"✅ VK-версия: {len(vk_text)} символов")
+        print(f"✅ [VK] VK-версия: {len(vk_text)} символов")
+        print(f"   Превью: {vk_text[:150]}...")
 
-        # Карточка для VK: используем ту же, что в TG. Если нет — генерируем.
+        # Карточка для VK
         if not image_path or not os.path.exists(image_path):
-            print(f"🎨 Карточки нет, генерирую новую для VK...")
+            print(f"🎨 [VK] Карточки нет, генерирую новую...")
             first_line = vk_text.split("\n")[0][:60] if vk_text else channel_key
             parsed_vk = {"title": first_line, "bullets": [], "intro": "",
                          "details": "", "bonus": "", "question": "", "hashtags": ""}
             image_path = await generate_image(parsed_vk, channel_key)
-            print(f"🎨 Карточка для VK: {image_path}")
+            print(f"🎨 [VK] Карточка для VK: {image_path}")
         else:
-            print(f"📷 Использую карточку из TG: {image_path}")
+            print(f"📷 [VK] Использую карточку из TG: {image_path}")
 
-        # Ссылка на пост в TG
+        # Ссылка на пост TG — ставим ПЕРЕД хештегами
         tg_link_base = TG_LINKS.get(channel_key, "")
         if tg_link_base and tg_message_id:
-            vk_text = vk_text.rstrip() + f"\n\n👉 Продолжение: {tg_link_base}/{tg_message_id}"
+            tg_link = f"{tg_link_base}/{tg_message_id}"
+            vk_text = vk_text.rstrip() + f"\n\n👉 Продолжение: {tg_link}"
+            print(f"🔗 [VK] Добавил ссылку: {tg_link}")
 
-        # Добавляем хештеги — только если их ещё нет
+        # Хештеги — только отсутствующие, все в одну строку
         brand_tag = "#CyberGuardianSec" if channel_key == "cyber" else "#AINavigator"
         general = "#кибербезопасность" if channel_key == "cyber" else "#нейросети"
 
@@ -56,15 +58,16 @@ async def _publish_vk_delayed(channel_key, post_text, image_path, tg_message_id)
 
         if tags_to_add:
             vk_text = vk_text.rstrip() + f"\n\n{' '.join(tags_to_add)}"
+            print(f"🏷 [VK] Добавил хештеги: {' '.join(tags_to_add)}")
 
-        print(f"📤 Публикую в VK (фото: {bool(image_path and os.path.exists(image_path))})...")
+        print(f"📤 [VK] Отправляю в VK (фото: {bool(image_path and os.path.exists(image_path))})...")
         result = await publish_to_vk(channel_key, vk_text, image_path)
         if result:
-            print(f"✅ VK опубликовано ({channel_key})")
+            print(f"✅ [VK] Успешно опубликовано ({channel_key})")
         else:
-            print(f"⚠️ VK вернул False")
+            print(f"⚠️ [VK] publish_to_vk вернул False")
     except Exception as e:
-        print(f"⚠️ VK ошибка: {e}")
+        print(f"❌ [VK] Ошибка: {e}")
 
 
 async def publish_rubric_post(bot, channel_key: str):
@@ -114,13 +117,12 @@ async def publish_rubric_post(bot, channel_key: str):
                 post_text = post_text[:4090] + "..."
             msg = await bot.send_message(profile["telegram_channel"], post_text)
             increment_post_count()
-            await _publish_vk_delayed(channel_key, post_text, None, msg.message_id)
+            await _publish_vk(channel_key, post_text, None, msg.message_id)
 
         else:
             post_text, parsed = await generate_post(topic, channel_key, rubric)
             print(f"✅ Текст: {len(post_text)} символов")
 
-            # Карточку генерируем ВСЕГДА — она нужна и для TG, и для VK
             print("🎨 Создаю карточку...")
             image_path = await generate_image(parsed, channel_key)
             print(f"🎨 Карточка: {image_path}")
@@ -133,7 +135,7 @@ async def publish_rubric_post(bot, channel_key: str):
                 tg_message = await bot.send_message(profile["telegram_channel"], post_text)
             increment_post_count()
 
-            await _publish_vk_delayed(channel_key, post_text, image_path, tg_message.message_id)
+            await _publish_vk(channel_key, post_text, image_path, tg_message.message_id)
 
         used_data = load_used_topics()
         used_data.setdefault(channel_key, []).append(topic)
