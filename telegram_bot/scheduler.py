@@ -13,12 +13,13 @@ from generator import (
 from analytics import collect_daily_stats, send_weekly_report, increment_post_count
 from api_monitor import check_all_apis
 from vk_publisher import publish_to_vk
+from comment_assistant import get_admin_chat_id
 
 scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 
 
 def _format_vk_post(vk_text, channel_key, tg_message_id):
-    """Приводит VK-текст к формату: тело → ссылка → хештеги одной строкой."""
+    """Формат VK: тело → ссылка → хештеги одной строкой."""
     lines = vk_text.rstrip().split("\n")
 
     body_lines = []
@@ -56,8 +57,34 @@ def _format_vk_post(vk_text, channel_key, tg_message_id):
     return body + "\n\n" + " ".join(unique)
 
 
-async def _publish_vk(channel_key, post_text, image_path, tg_message_id):
-    """VK сразу после TG: короткая версия + карточка + ссылка на TG-пост."""
+async def _send_card_to_admin(bot, image_path, channel_key):
+    """Отправляет карточку админу в личку — для вставки в VK вручную."""
+    if not image_path or not os.path.exists(image_path):
+        print(f"⚠️ [Admin] Карточки нет, пропускаю отправку")
+        return
+    admin_id = get_admin_chat_id()
+    if not admin_id:
+        print(f"⚠️ [Admin] admin_chat_id не найден")
+        return
+    try:
+        photo = FSInputFile(image_path)
+        channel_name = "CyberGuardianSec" if channel_key == "cyber" else "AI Navigator"
+        await bot.send_photo(
+            admin_id,
+            photo,
+            caption=(
+                f"🖼 <b>Карточка для VK</b> ({channel_name})\n\n"
+                f"Скачай и вставь в VK-пост вручную.\n"
+                f"<i>Потому что VK API не даёт загружать фото с токеном сообщества.</i>"
+            )
+        )
+        print(f"✅ [Admin] Карточка отправлена в личку ({channel_key})")
+    except Exception as e:
+        print(f"⚠️ [Admin] Не удалось отправить карточку: {e}")
+
+
+async def _publish_vk(bot, channel_key, post_text, image_path, tg_message_id):
+    """VK-пост (только текст) + карточка в личку админу."""
     print(f"\n{'='*50}")
     print(f"⏳ [VK] Публикация ({channel_key})")
     print(f"{'='*50}")
@@ -65,30 +92,23 @@ async def _publish_vk(channel_key, post_text, image_path, tg_message_id):
         print(f"📝 [VK] Генерирую VK-версию...")
         vk_text = await generate_vk_version(post_text, channel_key)
         print(f"✅ [VK] VK-версия: {len(vk_text)} символов")
-        print(f"   Превью: {vk_text[:150]}...")
-
-        if not image_path or not os.path.exists(image_path):
-            print(f"🎨 [VK] Карточки нет, генерирую новую...")
-            first_line = vk_text.split("\n")[0][:60] if vk_text else channel_key
-            parsed_vk = {"title": first_line, "bullets": [], "intro": "",
-                         "details": "", "bonus": "", "question": "", "hashtags": ""}
-            image_path = await generate_image(parsed_vk, channel_key)
-            print(f"🎨 [VK] Карточка для VK: {image_path}")
-        else:
-            print(f"📷 [VK] Использую карточку из TG: {image_path}")
 
         vk_text = _format_vk_post(vk_text, channel_key, tg_message_id)
         print(f"📋 [VK] Финальный текст ({len(vk_text)} символов):")
-        print(f"---")
         print(vk_text)
-        print(f"---")
 
-        print(f"📤 [VK] Отправляю в VK (фото: {bool(image_path and os.path.exists(image_path))})...")
-        result = await publish_to_vk(channel_key, vk_text, image_path)
+        # Публикуем без фото
+        print(f"📤 [VK] Отправляю в VK (без фото)...")
+        result = await publish_to_vk(channel_key, vk_text, None)
         if result:
-            print(f"✅ [VK] Успешно опубликовано ({channel_key})")
+            print(f"✅ [VK] Опубликовано ({channel_key})")
         else:
             print(f"⚠️ [VK] publish_to_vk вернул False")
+
+        # Отправляем карточку админу в личку
+        if image_path and os.path.exists(image_path):
+            await _send_card_to_admin(bot, image_path, channel_key)
+
     except Exception as e:
         print(f"❌ [VK] Ошибка: {e}")
         import traceback
@@ -142,8 +162,7 @@ async def publish_rubric_post(bot, channel_key: str):
                 post_text = post_text[:4090] + "..."
             msg = await bot.send_message(profile["telegram_channel"], post_text)
             increment_post_count()
-            # VK синхронно, не через create_task
-            await _publish_vk(channel_key, post_text, None, msg.message_id)
+            await _publish_vk(bot, channel_key, post_text, None, msg.message_id)
 
         else:
             post_text, parsed = await generate_post(topic, channel_key, rubric)
@@ -161,8 +180,7 @@ async def publish_rubric_post(bot, channel_key: str):
                 tg_message = await bot.send_message(profile["telegram_channel"], post_text)
             increment_post_count()
 
-            # VK синхронно
-            await _publish_vk(channel_key, post_text, image_path, tg_message.message_id)
+            await _publish_vk(bot, channel_key, post_text, image_path, tg_message.message_id)
 
         used_data = load_used_topics()
         used_data.setdefault(channel_key, []).append(topic)
