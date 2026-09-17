@@ -2,17 +2,22 @@ import aiohttp
 import urllib.parse
 import json
 import os
+import base64
 import random
 import re
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from config import (
     PROVOD_API_KEY, OPENROUTER_API_KEY, CHANNELS, DATA_DIR,
-    RUBRICS, POLLINATIONS_API_KEY
+    POLLINATIONS_API_KEY, PEXELS_API_KEY,
+    PROVOD_IMAGE_MODEL, PROVOD_IMAGE_URL,
+    BRAND_HASHTAGS, RUBRIC_HASHTAGS, GENERAL_HASHTAGS, TOPIC_HASHTAG_POOL,
+    PALETTES, POST_TEMPLATES, CARD_TEMPLATES, POST_HOOKS, POST_CLOSINGS,
 )
 
 PROVOD_URL = "https://api.provod.ai/v1/chat/completions"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+PEXELS_URL = "https://api.pexels.com/v1/search"
 
 PROVOD_MODELS = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-flash-latest"]
 OPENROUTER_MODELS = ["meta-llama/llama-3.3-70b-instruct:free", "google/gemma-3-12b-it:free"]
@@ -20,6 +25,8 @@ OPENROUTER_MODELS = ["meta-llama/llama-3.3-70b-instruct:free", "google/gemma-3-1
 IMAGES_DIR = os.path.join(DATA_DIR, "images")
 os.makedirs(IMAGES_DIR, exist_ok=True)
 USED_TOPICS_FILE = os.path.join(DATA_DIR, "used_topics.json")
+
+SAFE_ZONE = 110
 
 
 def load_used_topics():
@@ -64,26 +71,22 @@ async def _smart_call(prompt, temperature=0.85):
 
 
 def parse_post_structure(text):
-    result = {
-        "title": "", "intro": "", "details": "", "bonus": "",
-        "bullets": [], "question": "", "hashtags": ""
-    }
+    result = {"title": "", "intro": "", "details": "", "bonus": "",
+              "bullets": [], "question": "", "hashtags": ""}
     for line in text.split("\n"):
         line = line.strip()
-        if not line:
-            continue
+        if not line: continue
         u = line.upper()
         if u.startswith("ЗАГОЛОВОК"):
             result["title"] = line.split(":", 1)[1].strip() if ":" in line else ""
         elif u.startswith("ВСТУПЛЕНИЕ"):
             result["intro"] = line.split(":", 1)[1].strip() if ":" in line else ""
-        elif u.startswith("ПОДРОБНЕЕ"):
+        elif u.startswith("ПОДРОБНЕЕ") or u.startswith("РАЗБОР"):
             result["details"] = line.split(":", 1)[1].strip() if ":" in line else ""
         elif u.startswith("БОНУС"):
             result["bonus"] = line.split(":", 1)[1].strip() if ":" in line else ""
-        elif u.startswith("ПУНКТ"):
-            if ":" in line:
-                result["bullets"].append(line.split(":", 1)[1].strip())
+        elif u.startswith("ПУНКТ") or u.startswith("СОВЕТ"):
+            if ":" in line: result["bullets"].append(line.split(":", 1)[1].strip())
         elif u.startswith("ВОПРОС"):
             result["question"] = line.split(":", 1)[1].strip() if ":" in line else ""
         elif u.startswith("ХЕШТЕГ"):
@@ -93,27 +96,19 @@ def parse_post_structure(text):
 
 def build_post_text(p):
     parts = []
-    if p["title"]:
-        parts.append(p["title"])
-    if p["intro"]:
-        parts.append(p["intro"])
-    if p["details"]:
-        parts.append(p["details"])
-    if p["bullets"]:
-        parts.append("\n".join([f"{i}. {b}" for i, b in enumerate(p["bullets"][:3], 1)]))
-    if p["bonus"]:
-        parts.append(f"💡 {p['bonus']}")
-    if p["question"]:
-        parts.append(p["question"])
-    if p["hashtags"]:
-        parts.append(p["hashtags"])
+    if p["title"]: parts.append(p["title"])
+    if p["intro"]: parts.append(p["intro"])
+    if p["details"]: parts.append(p["details"])
+    if p["bullets"]: parts.append("\n".join([f"{i}. {b}" for i, b in enumerate(p["bullets"][:5], 1)]))
+    if p["bonus"]: parts.append(f"💡 {p['bonus']}")
+    if p["question"]: parts.append(p["question"])
+    if p["hashtags"]: parts.append(p["hashtags"])
     return "\n\n".join(parts)
 
 
 async def is_topic_unique(topic, channel_key):
     used = load_used_topics().get(channel_key, [])
-    if not used:
-        return True
+    if not used: return True
     recent = used[-30:]
     used_str = "\n".join([f"- {t}" for t in recent])
     prompt = f"""Ты — редактор. Похожа ли новая тема на уже использованные по СМЫСЛУ?
@@ -132,8 +127,7 @@ async def generate_ideas(channel_key, count=5):
     profile = CHANNELS[channel_key]
     used = load_used_topics().get(channel_key, [])
     used_str = ", ".join(used[-20:]) if used else "пока ничего"
-    context = ("Ниша: кибербезопасность." if channel_key == "cyber"
-               else "Ниша: нейросети для бизнеса.")
+    context = ("Ниша: кибербезопасность." if channel_key == "cyber" else "Ниша: нейросети для бизнеса.")
     prompt = f"""Ты — контент-стратег канала «{profile['name']}».
 {context}
 Уже использовано: {used_str}
@@ -144,134 +138,161 @@ async def generate_ideas(channel_key, count=5):
     return [i for i in ideas if 4 < len(i) < 80][:count]
 
 
-# ============================================================
-# ГЛАВНОЕ: ОЧЕЛОВЕЧЕННАЯ ГЕНЕРАЦИЯ ПОСТА
-# ============================================================
+def _get_fixed_hashtags(channel_key, rubric):
+    tags = []
+    brand = BRAND_HASHTAGS.get(channel_key, "")
+    if brand: tags.append(brand)
+    if rubric:
+        rt = RUBRIC_HASHTAGS.get(channel_key, {}).get(rubric.get("key", ""), "")
+        if rt: tags.append(rt)
+    general = GENERAL_HASHTAGS.get(channel_key, "")
+    if general: tags.append(general)
+    return tags
+
+
+def _get_topic_pool(channel_key, count=35):
+    pool = TOPIC_HASHTAG_POOL.get(channel_key, [])
+    return random.sample(pool, min(count, len(pool))) if pool else []
+
+
+POST_TEMPLATE_PROMPTS = {
+    "story": "СТРУКТУРА: История. Начни с конкретного момента из жизни. Разверни подробно, с эмоциями. В конце — вывод и 3 совета.",
+    "breakdown": "СТРУКТУРА: Разбор. Начни с факта/новости. Разбери: ЧТО случилось / ПОЧЕМУ важно / ЧТО делать.",
+    "checklist": "СТРУКТУРА: Чек-лист. Начни с проблемы. 5 коротких пунктов. В конце — 1 главный совет от себя.",
+    "myth": "СТРУКТУРА: Миф vs Реальность. Начни с мифа. Развенчай. Дай доказательство. В конце — что делать вместо этого.",
+}
+
 
 async def generate_post(topic, channel_key, rubric=None):
     profile = CHANNELS[channel_key]
     author = profile["author"]
+    rubric_block = f"Рубрика: {rubric['name']}" if rubric else ""
 
-    rubric_block = f"Рубрика: {rubric['name']}. Задача: {rubric['task']}" if rubric else ""
+    template = random.choice(POST_TEMPLATES)
+    template_hint = POST_TEMPLATE_PROMPTS.get(template, "")
+    hook = random.choice(POST_HOOKS)
+    closing = random.choice(POST_CLOSINGS)
+
+    fixed_tags = _get_fixed_hashtags(channel_key, rubric)
+    pool_sample = _get_topic_pool(channel_key, count=35)
+    fixed_tags_str = " ".join(fixed_tags) if fixed_tags else ""
+    pool_str = ", ".join(pool_sample) if pool_sample else ""
 
     prompt = f"""{profile['prompt_prefix']}
 
 О тебе:
 - Тебя зовут {author['name']}
-- Ты {author['role']}
+- {author['role']}
 - Опыт: {author['experience']}
-- Стиль: {author['style']}
-- Личная нота: {author['personal_touch']}
+- {author['personal_touch']}
 
 {rubric_block}
 
 Напиши пост на тему: {topic}
 
-=== ГЛАВНЫЕ ПРАВИЛА (ОЧЕНЬ ВАЖНО) ===
+{template_hint}
 
-1. ПИШИ ОТ ПЕРВОГО ЛИЦА. Используй «я», «мне», «по моему опыту», «я считаю».
-   Плохо: «Специалисты рекомендуют...»
-   Хорошо: «Я всегда советую...», «По моему опыту...»
+=== ХУК ОТКРЫТИЯ (обязательно) ===
+Используй приём: {hook}
 
-2. ДОБАВЬ ЛИЧНУЮ ИСТОРИЮ или пример из жизни.
-   Например: «Помню, как мой знакомый попался на похожую уловку...»
-   История короткая (1–2 предложения), правдоподобная.
+=== ИНТЕРАКТИВ В КОНЦЕ (обязательно) ===
+В конце используй: {closing}
 
-3. ВЫРАЖАЙ ЛИЧНОЕ МНЕНИЕ.
-   Например: «На мой взгляд, это самая недооценённая угроза», «Я считаю, что 2FA — это минимум».
-
-4. ИСПОЛЬЗУЙ РАЗГОВОРНЫЕ ОБОРОТЫ: «короче», «по сути», «честно говоря», «вот смотрите», «ну и конечно».
-   НЕ используй грубые слова: «прифигел», «офигел», «хрень», «фигня».
-
-5. ДОБАВЬ ЛЁГКУЮ ИРОНИЮ или юмор, если уместно.
-   Например: «Пароль qwerty123 — это как замок, который открывается от взгляда».
-   НЕ ПЕРЕИГРЫВАЙ.
-
-6. ЗАПРЕЩЕНЫ ШАБЛОННЫЕ ФРАЗЫ:
-   - «Важно отметить...»
-   - «В современном мире...»
-   - «Следует подчеркнуть...»
-   - «Необходимо учитывать...»
-   - «Ключевой момент...»
-   - «На сегодняшний день...»
-
-7. ЗАПРЕЩЕНЫ ОБОБЩЕНИЯ без конкретики:
-   Плохо: «Многие компании страдают от атак»
-   Хорошо: «В прошлом году моя знакомая компания потеряла 2 млн из-за одной фишинговой рассылки»
-
-8. УЧИТЫВАЙ АУДИТОРИЮ: обычные люди, не IT-специалисты.
-   - Заменяй жаргон на простые слова:
-     * «брутфорс» → «перебор паролей»
-     * «слитая база» → «база с украденными данными»
-     * «эксплойт» → «уязвимость»
-     * «фишинг» → «фишинг» (это слово уже все знают)
-     * «малварь» → «вредоносная программа»
-     * «бэкдор» → «скрытый доступ»
-   - Если используешь техническое слово — объясни в скобках.
-
-9. ОБРАЩЕНИЕ К ЧИТАТЕЛЯМ:
-   - Используй «друзья», «коллеги», «ребята» — но НЕ «пацаны», «братва», «чуваки».
-   - Вопрос в конце должен быть конкретным: не «что думаете?», а «когда последний раз меняли пароли?»
+=== ПРАВИЛА ЧЕЛОВЕЧНОСТИ ===
+1. От первого лица: «я», «мне», «по моему опыту».
+2. Личная история или пример (с именем или местом).
+3. Личное мнение: «на мой взгляд», «я считаю».
+4. Эмоции: «меня бесит», «я в шоке», «обидно», «кайфанул».
+5. Разговорные обороты: «короче», «по сути», «честно».
+6. Абзацы РАЗНОЙ длины.
+7. Цифра, статистика, факт — обязательно, если уместно.
+8. ЗАПРЕЩЕНЫ шаблоны: «Важно отметить», «В современном мире», «Следует подчеркнуть».
+9. Аудитория — обычные люди. Жаргон объясняй.
+10. Финал — живой, с интерактивом.
 
 === ФОРМАТ ОТВЕТА СТРОГО ===
+ЗАГОЛОВОК: [до 60 символов, без эмодзи]
+ВСТУПЛЕНИЕ: [2 предложения с хуком, 200–250 символов]
+ПОДРОБНЕЕ: [3–4 предложения, 350–450 символов]
+ПУНКТ 1: [до 80 символов]
+ПУНКТ 2: [до 80 символов]
+ПУНКТ 3: [до 80 символов]
+БОНУС: [150–200 символов, личный совет]
+ВОПРОС: [интерактив, до 90 символов]
+ХЕШТЕГИ: [10–15 через пробел]
 
-ЗАГОЛОВОК: [цепляющий заголовок БЕЗ эмодзи, до 60 символов]
-ВСТУПЛЕНИЕ: [2 предложения от первого лица, 200–250 символов]
-ПОДРОБНЕЕ: [3 предложения с личным мнением и примером, 350–450 символов]
-ПУНКТ 1: [совет БЕЗ эмодзи, до 80 символов]
-ПУНКТ 2: [совет БЕЗ эмодзи, до 80 символов]
-ПУНКТ 3: [совет БЕЗ эмодзи, до 80 символов]
-БОНУС: [1–2 предложения — личный совет от тебя, 150–200 символов]
-ВОПРОС: [вопрос к читателям, до 90 символов]
-ХЕШТЕГИ: [4 хештега через пробел]
+ХЕШТЕГИ:
+Фиксированные: {fixed_tags_str}
+Тематические (выбери 7–12): {pool_str}
+Итого 10–15. Без повторов.
 
-ВАЖНО:
-- Общая длина: 1000–1200 символов.
-- Текст должен звучать как рассказ живого человека, а не как статья из Википедии.
-- Если сомневаешься — представь, что ты рассказываешь это другу за чашкой кофе."""
+Длина: 1000–1300 символов."""
 
     raw = await _smart_call(prompt)
     parsed = parse_post_structure(raw)
 
     if not parsed["title"] or len(parsed["bullets"]) < 2:
-        print("   ⚠️ AI вернул неструктурированный текст")
         return raw, {"title": topic, "bullets": [], "intro": "", "details": "", "bonus": "", "question": "", "hashtags": ""}
 
+    existing_tags = parsed.get("hashtags", "").split()
+    if len(existing_tags) < 10:
+        need = 10 - len(existing_tags)
+        pool = TOPIC_HASHTAG_POOL.get(channel_key, [])
+        candidates = [t for t in pool if t not in existing_tags]
+        random.shuffle(candidates)
+        all_tags = existing_tags + fixed_tags + candidates[:need]
+        seen, unique = set(), []
+        for t in all_tags:
+            if t not in seen:
+                seen.add(t); unique.append(t)
+        parsed["hashtags"] = " ".join(unique[:15])
+
     return build_post_text(parsed), parsed
+
+
+async def generate_vk_version(post_text, channel_key):
+    prompt = f"""Сократи пост для VK. Аудитория VK не читает длинные тексты.
+
+Исходный пост:
+{post_text[:1500]}
+
+ТРЕБОВАНИЯ:
+1. Длина: 300–500 символов.
+2. ХУК в первой строке.
+3. 3–5 хештегов (не больше).
+4. Сохрани главную мысль и эмоцию.
+5. В конце — вопрос к читателям.
+
+Формат ответа — только готовый текст."""
+    try:
+        return await _smart_call(prompt, temperature=0.7)
+    except Exception as e:
+        print(f"   ⚠️ VK-версия: {e}")
+        return post_text[:500]
 
 
 async def generate_longread(topic, channel_key, rubric=None):
     profile = CHANNELS[channel_key]
     author = profile["author"]
-    rubric_block = f"Рубрика: {rubric['name']}. Задача: {rubric['task']}" if rubric else ""
-
+    fixed_tags = _get_fixed_hashtags(channel_key, rubric)
     prompt = f"""{profile['prompt_prefix']}
 
-О тебе:
-- Тебя зовут {author['name']}
-- Ты {author['role']}
-- Опыт: {author['experience']}
-
-{rubric_block}
+О тебе: {author['name']}, {author['role']}. Опыт: {author['experience']}.
 
 Напиши ГЛУБОКИЙ лонгрид на тему: {topic}
-
-ТРЕБОВАНИЯ:
 - 1800–2500 символов.
-- ОТ ПЕРВОГО ЛИЦА, с личными историями и мнениями.
-- Вступление, 3–4 раздела с <b>подзаголовками</b>, вывод.
-- 5–7 практических советов.
-- Заверши вопросом к читателям.
-- 4 хештега.
-- Без шаблонных фраз и жаргона. Пиши для обычных людей."""
+- ОТ ПЕРВОГО ЛИЦА, с личными историями.
+- 3–4 раздела с <b>подзаголовками</b>.
+- 5–7 советов.
+- ХЕШТЕГИ: {fixed_tags}"""
     return await _smart_call(prompt, temperature=0.8)
 
 
 async def generate_poll(topic, channel_key):
     profile = CHANNELS[channel_key]
-    prompt = f"""Канал «{profile['name']}». Придумай Telegram-опрос по теме: {topic}
+    prompt = f"""Канал «{profile['name']}». Опрос по теме: {topic}
 ФОРМАТ СТРОГО:
-ВОПРОС: [до 100 символов, как будто ты спрашиваешь у друзей]
+ВОПРОС: [до 100 символов]
 ВАРИАНТ: [вариант 1]
 ВАРИАНТ: [вариант 2]
 ВАРИАНТ: [вариант 3]"""
@@ -279,33 +300,99 @@ async def generate_poll(topic, channel_key):
     q, opts = "", []
     for line in response.split("\n"):
         line = line.strip()
-        if line.startswith("ВОПРОС:"):
-            q = line.replace("ВОПРОС:", "").strip()
+        if line.startswith("ВОПРОС:"): q = line.replace("ВОПРОС:", "").strip()
         elif line.startswith("ВАРИАНТ:"):
             o = line.replace("ВАРИАНТ:", "").strip()
             if o: opts.append(o)
     if not q or len(opts) < 2:
-        q = f"Что для вас важнее в теме «{topic}»?"
+        q = f"Что важнее в теме «{topic}»?"
         opts = ["Практика", "Теория", "Инструменты"]
     return {"question": q, "options": opts[:4]}
 
 
 # ============================================================
-# ВИЗУАЛ
+# PROVOD IMAGE (Nano Banana Pro)
 # ============================================================
 
+async def _build_image_prompt(post_text, channel_key):
+    if channel_key == "cyber":
+        style_context = (
+            "Cybersecurity topic. Dark, cinematic, professional photography. "
+            "Colors: deep navy blue, dark tones with neon green or cyan accents. "
+            "Style: like a photo from a professional IT/security magazine."
+        )
+    else:
+        style_context = (
+            "AI/technology topic. Cinematic, professional photography, futuristic. "
+            "Colors: dark purple, deep blue with neon green or cyan accents. "
+            "Style: like a photo from a tech magazine."
+        )
+    prompt = f"""Проанализируй пост и составь ОДИН детальный промт для фоновой картинки (на английском).
+
+{style_context}
+
+ПОСТ:
+{post_text[:800]}
+
+ТРЕБОВАНИЯ:
+1. Конкретный сюжет (что на фото).
+2. Настроение.
+3. Стиль (cinematic / minimalist / tech photography).
+4. Композиция с пустым местом сверху и снизу.
+5. НИКАКОГО ТЕКСТА на картинке.
+6. Размер: квадрат.
+
+ФОРМАТ — только промт на английском, одной строкой, до 400 символов."""
+    try:
+        result = await _smart_call(prompt, temperature=0.6)
+        result = result.strip().replace("\n", " ")
+        result = re.sub(r'^["\']|["\']$', '', result)
+        return result[:450]
+    except Exception as e:
+        print(f"   ⚠️ Промт: {e}")
+        fallback = _remove_emoji(post_text[:100])
+        return f"cinematic tech photography about {fallback}, dark moody atmosphere, no text on image"
+
+
+async def _generate_via_provod(prompt, channel_key):
+    if not prompt: return None
+    headers = {"Authorization": f"Bearer {PROVOD_API_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "model": PROVOD_IMAGE_MODEL,
+        "prompt": prompt,
+        "n": 1,
+        "size": "1024x1024",
+        "response_format": "b64_json",
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(PROVOD_IMAGE_URL, headers=headers, json=payload, timeout=120) as resp:
+                if resp.status != 200:
+                    err = await resp.text()
+                    print(f"   ⚠️ Provod Image [{resp.status}]: {err[:150]}")
+                    return None
+                data = await resp.json()
+        items = data.get("data", [])
+        if not items: return None
+        item = items[0]
+        if "b64_json" in item:
+            img_bytes = base64.b64decode(item["b64_json"])
+            return Image.open(BytesIO(img_bytes)).convert("RGB")
+        elif "url" in item:
+            return await _download_image(item["url"])
+        return None
+    except Exception as e:
+        print(f"   ⚠️ Provod Image: {e}")
+        return None
+
+
 def _find_font(size, bold=False):
-    names = [
-        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
-        "arialbd.ttf" if bold else "arial.ttf",
-        "Arial Bold.ttf" if bold else "Arial.ttf",
-        "LiberationSans-Bold.ttf" if bold else "LiberationSans-Regular.ttf",
-    ]
+    names = ["DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+             "arialbd.ttf" if bold else "arial.ttf",
+             "LiberationSans-Bold.ttf" if bold else "LiberationSans-Regular.ttf"]
     for n in names:
-        try:
-            return ImageFont.truetype(n, size)
-        except:
-            continue
+        try: return ImageFont.truetype(n, size)
+        except: continue
     return ImageFont.load_default()
 
 
@@ -317,8 +404,7 @@ def _wrap_text(text, font, max_width, draw):
         try:
             bbox = draw.textbbox((0, 0), test, font=font)
             w = bbox[2] - bbox[0]
-        except:
-            w = len(test) * 20
+        except: w = len(test) * 20
         if w <= max_width:
             current = test
         else:
@@ -332,134 +418,451 @@ def _remove_emoji(text):
     return re.sub(r'[^\w\s\d\.,!?\-:;()«»"\']', '', text).strip()
 
 
-async def _get_ai_background(topic, channel_key):
-    topic_clean = _remove_emoji(topic)[:80]
+def _extract_emoji(text):
+    if not text: return ""
+    for ch in text:
+        if ord(ch) > 0x1F000: return ch
+    return ""
 
-    if channel_key == "cyber":
-        style = (
-            f"abstract cybersecurity background about {topic_clean}, "
-            "dark navy blue and neon green, digital network, circuit patterns, "
-            "no text, no people, no faces, no logos, cinematic, high quality"
-        )
-    else:
-        style = (
-            f"abstract AI technology background about {topic_clean}, "
-            "dark purple and neon green, neural network, glowing particles, "
-            "no text, no people, no faces, no logos, cinematic, high quality"
-        )
 
-    clean = urllib.parse.quote(style[:400])
-    seed = random.randint(1, 999999)
-    url = (
-        f"https://image.pollinations.ai/prompt/{clean}"
-        f"?width=1080&height=1080&nologo=true&model=flux&seed={seed}"
-    )
-    if POLLINATIONS_API_KEY:
-        url += f"&key={POLLINATIONS_API_KEY}"
-
+async def _download_image(url):
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=120) as resp:
-                if resp.status != 200:
-                    return None
+            async with session.get(url, timeout=60) as resp:
+                if resp.status != 200: return None
                 content = await resp.read()
                 return Image.open(BytesIO(content)).convert("RGB")
     except Exception as e:
-        print(f"   ⚠️ Ошибка загрузки фона: {e}")
+        print(f"   ⚠️ Download: {e}")
         return None
 
 
-def _overlay_text_on_bg(bg_img, parsed, channel_key):
+async def _search_pexels(query, orientation="square"):
+    if not PEXELS_API_KEY or not query: return None
+    try:
+        async with aiohttp.ClientSession() as session:
+            headers = {"Authorization": PEXELS_API_KEY}
+            params = {"query": query, "per_page": 8, "orientation": orientation}
+            async with session.get(PEXELS_URL, headers=headers, params=params, timeout=20) as resp:
+                if resp.status != 200: return None
+                data = await resp.json()
+                photos = data.get("photos", [])
+                if not photos: return None
+                photo = random.choice(photos[:8])
+                return photo["src"]["large2x"] or photo["src"]["large"]
+    except Exception as e:
+        print(f"   ⚠️ Pexels: {e}")
+        return None
+
+
+async def _translate_to_english(text):
+    prompt = f"""Переведи на английский и дай 3-5 ключевых слов для поиска фото.
+Заголовок: "{text}"
+Формат:
+TRANSLATION: [перевод]
+KEYWORDS: [3-5 слов через запятую]"""
+    try:
+        result = await _smart_call(prompt, temperature=0.3)
+        translation, keywords = text, ""
+        for line in result.split("\n"):
+            if line.startswith("TRANSLATION:"):
+                translation = line.replace("TRANSLATION:", "").strip()
+            elif line.startswith("KEYWORDS:"):
+                keywords = line.replace("KEYWORDS:", "").strip()
+        return translation, keywords
+    except:
+        return text, ""
+
+
+async def _get_pollinations_bg(topic, channel_key):
+    topic_clean = _remove_emoji(topic)[:80]
+    if channel_key == "cyber":
+        style = f"abstract cybersecurity background about {topic_clean}, dark navy blue, neon green, no text, no people, cinematic"
+    else:
+        style = f"abstract AI technology background about {topic_clean}, dark purple, neon green, no text, no people, cinematic"
+    clean = urllib.parse.quote(style[:400])
+    seed = random.randint(1, 999999)
+    url = f"https://image.pollinations.ai/prompt/{clean}?width=1080&height=1080&nologo=true&model=flux&seed={seed}"
+    if POLLINATIONS_API_KEY: url += f"&key={POLLINATIONS_API_KEY}"
+    return await _download_image(url)
+
+
+async def _get_background(parsed, channel_key):
+    post_text = build_post_text(parsed) if parsed else ""
+
+    print(f"   🎨 Provod Image: строю промт...")
+    image_prompt = await _build_image_prompt(post_text, channel_key)
+    print(f"   📝 Промт: {image_prompt[:100]}...")
+    print(f"   🎨 Генерирую через {PROVOD_IMAGE_MODEL}...")
+    img = await _generate_via_provod(image_prompt, channel_key)
+    if img:
+        return img, "provod"
+    print(f"   ⚠️ Provod недоступен → Pexels")
+
+    title = parsed.get("title", "") if parsed else ""
+    translation, keywords = await _translate_to_english(title)
+    query = keywords if keywords else translation
+    if query:
+        print(f"   🔍 Pexels: {query}")
+        url = await _search_pexels(query)
+        if url:
+            img = await _download_image(url)
+            if img: return img, "pexels"
+
+    print(f"   🎨 Pollinations fallback")
+    img = await _get_pollinations_bg(translation or title, channel_key)
+    if img: return img, "pollinations"
+
+    return None, "gradient"
+
+
+def _make_gradient(width, height, color_top, color_bottom):
+    base = Image.new('RGB', (width, height), color_top)
+    top = Image.new('RGB', (width, height), color_bottom)
+    mask = Image.new('L', (width, height))
+    mask_data = []
+    for y in range(height):
+        val = int(255 * (y / height))
+        mask_data.extend([val] * width)
+    mask.putdata(mask_data)
+    base.paste(top, (0, 0), mask)
+    return base
+
+
+def _brand_plate(draw, W, H, accent, brand):
+    plate_w = 640; plate_h = 110
+    margin = 20
+    x1 = W - plate_w - margin
+    y1 = H - plate_h - margin
+    x2 = W - margin
+    y2 = H - margin
+    draw.rectangle([x1, y1, x2, y2], fill=(0, 0, 0))
+    draw.rectangle([x1, y1, x2, y1 + 4], fill=accent)
+    font_brand = _find_font(30, bold=True)
+    draw.text((x1 + 30, y1 + 30), brand, font=font_brand, fill=accent)
+    font_quote = _find_font(18)
+    draw.text((x1 + 30, y1 + 72), "Егор, автор канала", font=font_quote, fill=(150, 150, 150))
+
+
+def _card_classic(bg, parsed, channel_key, palette, brand, accent):
     W, H = 1080, 1080
-    bg = bg_img.resize((W, H)).convert("RGB")
-
+    SAFE = SAFE_ZONE
+    bg = bg.resize((W, H)).convert("RGB")
     overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    ov_draw = ImageDraw.Draw(overlay)
-    ov_draw.rectangle([0, 0, W, 420], fill=(0, 0, 0, 170))
-    ov_draw.rectangle([0, H - 560, W, H], fill=(0, 0, 0, 190))
-    ov_draw.rectangle([W - 500, H - 140, W, H], fill=(0, 0, 0, 255))
-
+    ov = ImageDraw.Draw(overlay)
+    ov.rectangle([0, 0, W, 480], fill=(0, 0, 0, 175))
+    ov.rectangle([0, H - 620, W, H], fill=(0, 0, 0, 195))
     bg = Image.alpha_composite(bg.convert("RGBA"), overlay).convert("RGB")
     draw = ImageDraw.Draw(bg)
-
-    if channel_key == "cyber":
-        accent = (0, 255, 150)
-        brand = "CyberGuardianSec"
-    else:
-        accent = (0, 255, 130)
-        brand = "AI Navigator"
-
-    font_title = _find_font(60, bold=True)
-    font_bullet = _find_font(36)
-    font_num = _find_font(30, bold=True)
-    font_brand = _find_font(32, bold=True)
-
-    pad = 60
-
-    title = _remove_emoji(parsed.get("title", "Без заголовка"))
-    if not title:
-        title = "Без заголовка"
-
-    y = 80
-    for line in _wrap_text(title, font_title, W - 2 * pad, draw)[:3]:
-        draw.text((pad, y), line, font=font_title, fill=(0, 0, 0),
-                  stroke_width=5, stroke_fill=(0, 0, 0))
-        draw.text((pad, y), line, font=font_title, fill=(255, 255, 255))
-        y += 74
-
-    bullets = parsed.get("bullets", [])[:3]
-    if not bullets:
-        bullets = ["Подробности в посте", "Читай ниже", "Подпишись на канал"]
-
-    y = H - 520
-    for i, bullet in enumerate(bullets, 1):
-        bullet_clean = _remove_emoji(bullet)
-        if not bullet_clean:
-            bullet_clean = "..."
-
+    pad = SAFE
+    emoji = _extract_emoji(parsed.get("title", ""))
+    y = SAFE - 20
+    if emoji:
+        font_e = _find_font(80)
+        draw.text((pad, y), emoji, font=font_e)
+        y += 110
+    title = _remove_emoji(parsed.get("title", "")) or "Без заголовка"
+    size = 54
+    lines = []
+    for size in [54, 50, 46, 42, 38]:
+        font_t = _find_font(size, bold=True)
+        lines = _wrap_text(title, font_t, W - 2 * pad, draw)
+        if len(lines) <= 3:
+            break
+    for line in lines[:3]:
+        draw.text((pad, y), line, font=font_t, fill=(0,0,0), stroke_width=5, stroke_fill=(0,0,0))
+        draw.text((pad, y), line, font=font_t, fill=(255, 255, 255))
+        y += size + 16
+    bullets = parsed.get("bullets", [])[:3] or ["Подробности в посте", "Читай ниже", "Подпишись"]
+    font_b = _find_font(34); font_n = _find_font(30, bold=True)
+    y = H - 560
+    for i, b in enumerate(bullets, 1):
+        bc = _remove_emoji(b) or "..."
         cx, cy = pad + 26, y + 26
         draw.ellipse([cx - 26, cy - 26, cx + 26, cy + 26], fill=accent)
         num = str(i)
         try:
-            bbox = draw.textbbox((0, 0), num, font=font_num)
-            nw, nh = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        except:
-            nw, nh = 12, 20
-        draw.text((cx - nw // 2, cy - nh // 2 - 5), num, font=font_num, fill=(0, 0, 0))
-
-        for line in _wrap_text(bullet_clean, font_bullet, W - 2 * pad - 80, draw)[:2]:
-            draw.text((pad + 80, y), line, font=font_bullet, fill=(0, 0, 0),
-                      stroke_width=3, stroke_fill=(0, 0, 0))
-            draw.text((pad + 80, y), line, font=font_bullet, fill=(240, 240, 240))
-            y += 50
+            bb = draw.textbbox((0, 0), num, font=font_n); nw, nh = bb[2]-bb[0], bb[3]-bb[1]
+        except: nw, nh = 12, 20
+        draw.text((cx - nw//2, cy - nh//2 - 5), num, font=font_n, fill=(0, 0, 0))
+        for line in _wrap_text(bc, font_b, W - 2*pad - 80, draw)[:2]:
+            draw.text((pad + 80, y), line, font=font_b, fill=(0,0,0), stroke_width=3, stroke_fill=(0,0,0))
+            draw.text((pad + 80, y), line, font=font_b, fill=(240, 240, 240))
+            y += 48
         y += 14
-
-    draw.text((W - 440, H - 80), brand, font=font_brand, fill=accent)
-
+    _brand_plate(draw, W, H, accent, brand)
     return bg
+
+
+def _card_gradient(bg, parsed, channel_key, palette, brand, accent):
+    W, H = 1080, 1080
+    SAFE = SAFE_ZONE
+    bg = bg.resize((W, H)).convert("RGB")
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ov = ImageDraw.Draw(overlay)
+    for x in range(W):
+        alpha = int(220 * (1 - x / W * 0.7))
+        ov.rectangle([x, 0, x+1, H], fill=(0, 0, 0, alpha))
+    bg = Image.alpha_composite(bg.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(bg)
+    pad = SAFE
+    emoji = _extract_emoji(parsed.get("title", ""))
+    y = SAFE + 20
+    if emoji:
+        font_e = _find_font(90)
+        draw.text((pad, y), emoji, font=font_e)
+        y += 130
+    title = _remove_emoji(parsed.get("title", "")) or "Без заголовка"
+    size = 58
+    lines = []
+    for size in [58, 54, 50, 46, 42]:
+        font_t = _find_font(size, bold=True)
+        lines = _wrap_text(title, font_t, int(W * 0.65), draw)
+        if len(lines) <= 4:
+            break
+    for line in lines[:4]:
+        draw.text((pad, y), line, font=font_t, fill=(0,0,0), stroke_width=6, stroke_fill=(0,0,0))
+        draw.text((pad, y), line, font=font_t, fill=(255, 255, 255))
+        y += size + 16
+    bullets = parsed.get("bullets", [])[:3]
+    font_b = _find_font(28)
+    y += 30
+    for b in bullets:
+        bc = _remove_emoji(b)
+        if not bc: continue
+        draw.text((pad, y), f"— {bc}", font=font_b, fill=accent, stroke_width=2, stroke_fill=(0,0,0))
+        y += 44
+    _brand_plate(draw, W, H, accent, brand)
+    return bg
+
+
+def _card_accent(bg, parsed, channel_key, palette, brand, accent):
+    W, H = 1080, 1080
+    SAFE = SAFE_ZONE
+    bg = bg.resize((W, H)).convert("RGB")
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ov = ImageDraw.Draw(overlay)
+    ov.rectangle([0, 0, W, H], fill=(0, 0, 0, 180))
+    ov.rectangle([0, H - 300, W, H], fill=(0, 0, 0, 230))
+    bg = Image.alpha_composite(bg.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(bg)
+    emoji = _extract_emoji(parsed.get("title", ""))
+    y = SAFE + 40
+    if emoji:
+        font_big = _find_font(200)
+        try:
+            bb = draw.textbbox((0, 0), emoji, font=font_big)
+            bw = bb[2] - bb[0]
+            draw.text(((W - bw) // 2, y), emoji, font=font_big)
+        except: pass
+        y += 240
+    title = _remove_emoji(parsed.get("title", "")) or "Без заголовка"
+    size = 54
+    lines = []
+    for size in [54, 50, 46, 42, 38]:
+        font_t = _find_font(size, bold=True)
+        lines = _wrap_text(title, font_t, W - 2 * SAFE, draw)
+        if len(lines) <= 4:
+            break
+    for line in lines[:4]:
+        try:
+            bb = draw.textbbox((0, 0), line, font=font_t); lw = bb[2] - bb[0]
+        except: lw = 0
+        x = (W - lw) // 2
+        draw.text((x, y), line, font=font_t, fill=(0,0,0), stroke_width=6, stroke_fill=(0,0,0))
+        draw.text((x, y), line, font=font_t, fill=(255, 255, 255))
+        y += size + 16
+    bullets = parsed.get("bullets", [])[:3]
+    font_b = _find_font(28)
+    y = H - 280
+    for b in bullets[:3]:
+        bc = _remove_emoji(b)
+        if not bc: continue
+        draw.text((SAFE, y), f"• {bc}", font=font_b, fill=accent)
+        y += 42
+    _brand_plate(draw, W, H, accent, brand)
+    return bg
+
+
+def _card_bottom_up(bg, parsed, channel_key, palette, brand, accent):
+    W, H = 1080, 1080
+    SAFE = SAFE_ZONE
+    bg = bg.resize((W, H)).convert("RGB")
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ov = ImageDraw.Draw(overlay)
+    ov.rectangle([0, 0, W, 520], fill=(0, 0, 0, 195))
+    ov.rectangle([0, H - 520, W, H], fill=(0, 0, 0, 225))
+    bg = Image.alpha_composite(bg.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(bg)
+    pad = SAFE
+    bullets = parsed.get("bullets", [])[:3] or ["Пункт 1", "Пункт 2", "Пункт 3"]
+    font_b = _find_font(34); font_n = _find_font(30, bold=True)
+    y = SAFE - 20
+    for i, b in enumerate(bullets, 1):
+        bc = _remove_emoji(b) or "..."
+        cx, cy = pad + 26, y + 26
+        draw.ellipse([cx - 26, cy - 26, cx + 26, cy + 26], fill=accent)
+        num = str(i)
+        try:
+            bb = draw.textbbox((0, 0), num, font=font_n); nw, nh = bb[2]-bb[0], bb[3]-bb[1]
+        except: nw, nh = 12, 20
+        draw.text((cx - nw//2, cy - nh//2 - 5), num, font=font_n, fill=(0,0,0))
+        for line in _wrap_text(bc, font_b, W - 2*pad - 80, draw)[:2]:
+            draw.text((pad + 80, y), line, font=font_b, fill=(240, 240, 240))
+            y += 46
+        y += 14
+    emoji = _extract_emoji(parsed.get("title", ""))
+    y = H - 430
+    if emoji:
+        font_e = _find_font(80)
+        draw.text((pad, y), emoji, font=font_e)
+        y += 100
+    title = _remove_emoji(parsed.get("title", "")) or "Без заголовка"
+    size = 60
+    lines = []
+    for size in [60, 56, 52, 48, 44]:
+        font_t = _find_font(size, bold=True)
+        lines = _wrap_text(title, font_t, W - 2 * pad, draw)
+        if len(lines) <= 3:
+            break
+    for line in lines[:3]:
+        draw.text((pad, y), line, font=font_t, fill=(0,0,0), stroke_width=6, stroke_fill=(0,0,0))
+        draw.text((pad, y), line, font=font_t, fill=(255, 255, 255))
+        y += size + 16
+    _brand_plate(draw, W, H, accent, brand)
+    return bg
+
+
+def _card_magazine(bg, parsed, channel_key, palette, brand, accent):
+    W, H = 1080, 1080
+    SAFE = SAFE_ZONE
+    bg = bg.resize((W, H)).convert("RGB")
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ov = ImageDraw.Draw(overlay)
+    ov.rectangle([0, 0, W, 220], fill=(0, 0, 0, 220))
+    ov.rectangle([0, 220, W, H - 220], fill=(0, 0, 0, 145))
+    ov.rectangle([0, H - 220, W, H], fill=(0, 0, 0, 220))
+    bg = Image.alpha_composite(bg.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(bg)
+    pad = SAFE
+    font_cat = _find_font(24, bold=True)
+    cat = "КИБЕРБЕЗОПАСНОСТЬ" if channel_key == "cyber" else "НЕЙРОСЕТИ И AI"
+    draw.text((pad, SAFE - 20), cat, font=font_cat, fill=accent)
+    draw.line([(pad, SAFE + 30), (W - pad, SAFE + 30)], fill=accent, width=3)
+    emoji = _extract_emoji(parsed.get("title", ""))
+    y = SAFE + 160
+    if emoji:
+        font_e = _find_font(120)
+        try:
+            bb = draw.textbbox((0, 0), emoji, font=font_e); bw = bb[2] - bb[0]
+            draw.text(((W - bw) // 2, y), emoji, font=font_e)
+        except: pass
+        y += 150
+    title = _remove_emoji(parsed.get("title", "")) or "Без заголовка"
+    size = 68
+    lines = []
+    for size in [68, 62, 56, 50, 46]:
+        font_t = _find_font(size, bold=True)
+        lines = _wrap_text(title, font_t, W - 2 * pad, draw)
+        if len(lines) <= 4:
+            break
+    for line in lines[:4]:
+        try:
+            bb = draw.textbbox((0, 0), line, font=font_t); lw = bb[2] - bb[0]
+        except: lw = 0
+        x = (W - lw) // 2
+        draw.text((x, y), line, font=font_t, fill=(0,0,0), stroke_width=6, stroke_fill=(0,0,0))
+        draw.text((x, y), line, font=font_t, fill=(255, 255, 255))
+        y += size + 16
+    bullets = parsed.get("bullets", [])[:3]
+    font_b = _find_font(26, bold=True)
+    if bullets:
+        y = H - SAFE - 70
+        text = " • ".join([_remove_emoji(b)[:30] for b in bullets if b])
+        for line in _wrap_text(text, font_b, W - 2 * pad, draw)[:2]:
+            draw.text((pad, y), line, font=font_b, fill=accent)
+            y += 36
+    _brand_plate(draw, W, H, accent, brand)
+    return bg
+
+
+CARD_FUNCS = {
+    "classic": _card_classic,
+    "gradient": _card_gradient,
+    "accent": _card_accent,
+    "bottom_up": _card_bottom_up,
+    "magazine": _card_magazine,
+}
 
 
 async def generate_image(parsed, channel_key="cyber"):
     try:
-        print(f"   🎨 Скачиваю AI-фон...")
-        bg = await _get_ai_background(parsed.get("title", ""), channel_key)
-
-        if bg:
-            print(f"   ✏️ Накладываю текст...")
-            card = _overlay_text_on_bg(bg, parsed, channel_key)
-        else:
-            print(f"   ⚠️ Фон не загрузился, использую градиент")
-            if channel_key == "cyber":
-                bg = Image.new("RGB", (1080, 1080), (10, 20, 50))
-            else:
-                bg = Image.new("RGB", (1080, 1080), (40, 10, 60))
-            card = _overlay_text_on_bg(bg, parsed, channel_key)
-
-        filename = f"{channel_key}_card_{abs(hash(parsed.get('title', '') + str(random.randint(1,99999)))) % 100000}.png"
+        bg, source = await _get_background(parsed, channel_key)
+        print(f"   📷 Фон: {source}")
+        palette = random.choice(PALETTES.get(channel_key, PALETTES["cyber"]))
+        accent = palette["accent"]
+        brand = "CyberGuardianSec" if channel_key == "cyber" else "AI Navigator"
+        if bg is None:
+            bg = _make_gradient(1080, 1080, palette["bg_top"], palette["bg_bottom"])
+        template = random.choice(CARD_TEMPLATES)
+        print(f"   🎨 Шаблон: {template}")
+        card = CARD_FUNCS[template](bg, parsed, channel_key, palette, brand, accent)
+        filename = f"{channel_key}_{template}_{abs(hash(parsed.get('title','') + str(random.randint(1,99999)))) % 100000}.png"
         filepath = os.path.join(IMAGES_DIR, filename)
         card.save(filepath, "PNG")
         print(f"   ✅ Готово: {filename}")
         return filepath
     except Exception as e:
-        print(f"   ⚠️ Ошибка визуала: {e}")
+        print(f"   ⚠️ Визуал: {e}")
+        return ""
+
+
+def _create_article_cover(bg_img, title, channel_key):
+    W, H = 1200, 630
+    bg = bg_img.resize((W, H)).convert("RGB")
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ov = ImageDraw.Draw(overlay)
+    ov.rectangle([0, 0, int(W * 0.72), H], fill=(0, 0, 0, 165))
+    ov.rectangle([0, H - 80, W, H], fill=(0, 0, 0, 220))
+    bg = Image.alpha_composite(bg.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(bg)
+    palette = random.choice(PALETTES.get(channel_key, PALETTES["cyber"]))
+    accent = palette["accent"]
+    brand = "CyberGuardianSec" if channel_key == "cyber" else "AI Navigator"
+    category = "КИБЕРБЕЗОПАСНОСТЬ" if channel_key == "cyber" else "НЕЙРОСЕТИ И AI"
+    font_cat = _find_font(20, bold=True)
+    font_t = _find_font(48, bold=True)
+    font_b = _find_font(26, bold=True)
+    pad = 50
+    draw.text((pad, 30), category, font=font_cat, fill=accent)
+    clean = _remove_emoji(title) or "Статья"
+    y = 110
+    for line in _wrap_text(clean, font_t, int(W * 0.65), draw)[:4]:
+        draw.text((pad, y), line, font=font_t, fill=(0,0,0), stroke_width=5, stroke_fill=(0,0,0))
+        draw.text((pad, y), line, font=font_t, fill=(255, 255, 255))
+        y += 60
+    draw.text((pad, H - 55), brand, font=font_b, fill=accent)
+    return bg
+
+
+async def generate_article_cover(title, channel_key="cyber"):
+    try:
+        image_prompt = await _build_image_prompt(title, channel_key)
+        bg = await _generate_via_provod(image_prompt, channel_key)
+        if not bg:
+            translation, keywords = await _translate_to_english(title)
+            query = keywords if keywords else translation
+            url = await _search_pexels(query, orientation="landscape")
+            bg = await _download_image(url) if url else None
+        if not bg:
+            bg = await _get_pollinations_bg(title, channel_key)
+        if not bg:
+            bg = Image.new("RGB", (1200, 630), (10, 20, 50) if channel_key == "cyber" else (40, 10, 60))
+        cover = _create_article_cover(bg, title, channel_key)
+        filename = f"cover_{channel_key}_{abs(hash(title)) % 100000}.png"
+        filepath = os.path.join(IMAGES_DIR, filename)
+        cover.save(filepath, "PNG")
+        return filepath
+    except Exception as e:
+        print(f"   ⚠️ Обложка: {e}")
         return ""
