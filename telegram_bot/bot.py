@@ -101,32 +101,35 @@ async def _send_preview(chat_id, post_text, image_path, channel_key, reply_marku
         await bot.send_message(chat_id, f"📄 <b>Превью:</b>\n\n{preview}", reply_markup=reply_markup)
 
 
-async def _vk_publish_delayed(channel_key, post_text, image_path, tg_message_id):
-    """VK через 5 минут: короткая версия + карточка + ссылка на TG-пост."""
+async def _publish_vk_now(channel_key, post_text, image_path, tg_message_id):
+    """VK сразу после TG: короткая версия + карточка + ссылка на TG-пост."""
     try:
-        await asyncio.sleep(300)
+        print(f"\n⏳ [VK] Начинаю публикацию ({channel_key})...")
 
-        print(f"📝 Генерирую VK-версию...")
+        print(f"📝 [VK] Генерирую VK-версию...")
         vk_text = await generate_vk_version(post_text, channel_key)
-        print(f"✅ VK-версия: {len(vk_text)} символов")
+        print(f"✅ [VK] VK-версия: {len(vk_text)} символов")
+        print(f"   Превью: {vk_text[:150]}...")
 
-        # Карточка: используем ту же, что в TG. Если нет — генерируем.
+        # Карточка для VK
         if not image_path or not os.path.exists(image_path):
-            print(f"🎨 Карточки нет, генерирую для VK...")
+            print(f"🎨 [VK] Карточки нет, генерирую новую...")
             first_line = vk_text.split("\n")[0][:60] if vk_text else channel_key
             parsed_vk = {"title": first_line, "bullets": [], "intro": "",
                          "details": "", "bonus": "", "question": "", "hashtags": ""}
             image_path = await generate_image(parsed_vk, channel_key)
-            print(f"🎨 Карточка для VK: {image_path}")
+            print(f"🎨 [VK] Карточка для VK: {image_path}")
         else:
-            print(f"📷 Использую карточку из TG: {image_path}")
+            print(f"📷 [VK] Использую карточку из TG: {image_path}")
 
-        # Ссылка на пост TG
+        # Ссылка на пост TG — ПЕРЕД хештегами
         tg_link_base = TG_LINKS.get(channel_key, "")
         if tg_link_base and tg_message_id:
-            vk_text = vk_text.rstrip() + f"\n\n👉 Продолжение: {tg_link_base}/{tg_message_id}"
+            tg_link = f"{tg_link_base}/{tg_message_id}"
+            vk_text = vk_text.rstrip() + f"\n\n👉 Продолжение: {tg_link}"
+            print(f"🔗 [VK] Добавил ссылку: {tg_link}")
 
-        # Хештеги — только если их нет в тексте
+        # Хештеги — только отсутствующие
         brand_tag = "#CyberGuardianSec" if channel_key == "cyber" else "#AINavigator"
         general = "#кибербезопасность" if channel_key == "cyber" else "#нейросети"
 
@@ -139,15 +142,16 @@ async def _vk_publish_delayed(channel_key, post_text, image_path, tg_message_id)
 
         if tags_to_add:
             vk_text = vk_text.rstrip() + f"\n\n{' '.join(tags_to_add)}"
+            print(f"🏷 [VK] Добавил хештеги: {' '.join(tags_to_add)}")
 
-        print(f"📤 VK (фото: {bool(image_path and os.path.exists(image_path))})...")
+        print(f"📤 [VK] Отправляю в VK (фото: {bool(image_path and os.path.exists(image_path))})...")
         result = await publish_to_vk(channel_key, vk_text, image_path)
         if result:
-            print(f"✅ VK опубликовано ({channel_key})")
+            print(f"✅ [VK] Успешно опубликовано ({channel_key})")
         else:
-            print(f"⚠️ VK вернул False")
+            print(f"⚠️ [VK] publish_to_vk вернул False")
     except Exception as e:
-        print(f"⚠️ VK: {e}")
+        print(f"❌ [VK] Ошибка: {e}")
 
 
 @dp.message(Command("start"))
@@ -445,10 +449,10 @@ async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
         except:
             pass
         await callback.message.answer(
-            f"📱 Опубликовано в TG ({profile['name']}). VK — через 5 минут.",
+            f"📱 Опубликовано в TG ({profile['name']}). Публикую в VK...",
             reply_markup=main_menu()
         )
-        asyncio.create_task(_vk_publish_delayed(channel_key, post_text, image_path, tg_message.message_id))
+        asyncio.create_task(_publish_vk_now(channel_key, post_text, image_path, tg_message.message_id))
     except Exception as e:
         await callback.message.answer(f"❌ {e}", reply_markup=main_menu())
     await state.clear()
