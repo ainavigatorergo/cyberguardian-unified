@@ -101,17 +101,31 @@ async def _send_preview(chat_id, post_text, image_path, channel_key, reply_marku
 
 
 async def _vk_publish_delayed(channel_key, post_text, image_path, tg_message_id):
+    """VK через 5 минут: короткая версия + карточка + ссылка на TG-пост."""
     try:
         await asyncio.sleep(300)
+
         vk_text = await generate_vk_version(post_text, channel_key)
+
+        # Если карточки нет — генерируем для VK
+        if not image_path or not os.path.exists(image_path):
+            print("🎨 Генерирую карточку для VK...")
+            first_line = vk_text.split("\n")[0][:60] if vk_text else channel_key
+            parsed_vk = {"title": first_line, "bullets": [], "intro": "",
+                         "details": "", "bonus": "", "question": "", "hashtags": ""}
+            image_path = await generate_image(parsed_vk, channel_key)
+
         tg_link_base = TG_LINKS.get(channel_key, "")
         if tg_link_base and tg_message_id:
             vk_text = vk_text.rstrip() + f"\n\n👉 Продолжение: {tg_link_base}/{tg_message_id}"
+
         brand_tag = "#CyberGuardianSec" if channel_key == "cyber" else "#AINavigator"
         general = "#кибербезопасность" if channel_key == "cyber" else "#нейросети"
         vk_text = vk_text.rstrip() + f"\n\n{brand_tag} {general}"
+
         tg_mention = "t.me/CyberGuardianSec" if channel_key == "cyber" else "t.me/ainavigatorErgo"
         vk_text = vk_text.rstrip() + f"\n📢 Подписаться: {tg_mention}"
+
         await publish_to_vk(channel_key, vk_text, image_path)
         print(f"✅ VK опубликовано ({channel_key})")
     except Exception as e:
@@ -381,7 +395,10 @@ async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
         increment_post_count()
         try: await callback.message.delete()
         except: pass
-        await callback.message.answer(f"📱 Опубликовано в TG ({profile['name']}). VK — через 5 минут.", reply_markup=main_menu())
+        await callback.message.answer(
+            f"📱 Опубликовано в TG ({profile['name']}). VK — через 5 минут.",
+            reply_markup=main_menu()
+        )
         asyncio.create_task(_vk_publish_delayed(channel_key, post_text, image_path, tg_message.message_id))
     except Exception as e:
         await callback.message.answer(f"❌ {e}", reply_markup=main_menu())
