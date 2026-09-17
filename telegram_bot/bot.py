@@ -22,7 +22,7 @@ from generator import (
     generate_article_cover, generate_vk_version,
 )
 from scheduler import start_scheduler
-from comment_assistant import send_daily_digest, save_admin_chat_id
+from comment_assistant import send_daily_digest, save_admin_chat_id, get_admin_chat_id
 from analytics import send_stats_now, increment_post_count
 from api_monitor import get_api_status
 from vk_publisher import publish_to_vk
@@ -102,7 +102,7 @@ async def _send_preview(chat_id, post_text, image_path, channel_key, reply_marku
 
 
 def _format_vk_post(vk_text, channel_key, tg_message_id):
-    """Приводит VK-текст к формату: тело → ссылка → хештеги одной строкой."""
+    """Формат VK: тело → ссылка → хештеги одной строкой."""
     lines = vk_text.rstrip().split("\n")
 
     body_lines = []
@@ -140,8 +140,34 @@ def _format_vk_post(vk_text, channel_key, tg_message_id):
     return body + "\n\n" + " ".join(unique)
 
 
+async def _send_card_to_admin(image_path, channel_key):
+    """Отправляет карточку админу в личку для вставки в VK."""
+    if not image_path or not os.path.exists(image_path):
+        print(f"⚠️ [Admin] Карточки нет")
+        return
+    admin_id = get_admin_chat_id()
+    if not admin_id:
+        print(f"⚠️ [Admin] admin_chat_id не найден")
+        return
+    try:
+        photo = FSInputFile(image_path)
+        channel_name = "CyberGuardianSec" if channel_key == "cyber" else "AI Navigator"
+        await bot.send_photo(
+            admin_id,
+            photo,
+            caption=(
+                f"🖼 <b>Карточка для VK</b> ({channel_name})\n\n"
+                f"Скачай и вставь в VK-пост вручную.\n"
+                f"<i>VK API не даёт загружать фото с токеном сообщества.</i>"
+            )
+        )
+        print(f"✅ [Admin] Карточка отправлена ({channel_key})")
+    except Exception as e:
+        print(f"⚠️ [Admin] Ошибка: {e}")
+
+
 async def _publish_vk_now(channel_key, post_text, image_path, tg_message_id):
-    """VK сразу после TG: короткая версия + карточка + ссылка на TG-пост."""
+    """VK-пост (только текст) + карточка админу."""
     print(f"\n{'='*50}")
     print(f"⏳ [VK] Публикация ({channel_key})")
     print(f"{'='*50}")
@@ -149,30 +175,20 @@ async def _publish_vk_now(channel_key, post_text, image_path, tg_message_id):
         print(f"📝 [VK] Генерирую VK-версию...")
         vk_text = await generate_vk_version(post_text, channel_key)
         print(f"✅ [VK] VK-версия: {len(vk_text)} символов")
-        print(f"   Превью: {vk_text[:150]}...")
-
-        if not image_path or not os.path.exists(image_path):
-            print(f"🎨 [VK] Карточки нет, генерирую новую...")
-            first_line = vk_text.split("\n")[0][:60] if vk_text else channel_key
-            parsed_vk = {"title": first_line, "bullets": [], "intro": "",
-                         "details": "", "bonus": "", "question": "", "hashtags": ""}
-            image_path = await generate_image(parsed_vk, channel_key)
-            print(f"🎨 [VK] Карточка для VK: {image_path}")
-        else:
-            print(f"📷 [VK] Использую карточку из TG: {image_path}")
 
         vk_text = _format_vk_post(vk_text, channel_key, tg_message_id)
         print(f"📋 [VK] Финальный текст ({len(vk_text)} символов):")
-        print(f"---")
         print(vk_text)
-        print(f"---")
 
-        print(f"📤 [VK] Отправляю в VK (фото: {bool(image_path and os.path.exists(image_path))})...")
-        result = await publish_to_vk(channel_key, vk_text, image_path)
+        print(f"📤 [VK] Отправляю в VK (без фото)...")
+        result = await publish_to_vk(channel_key, vk_text, None)
         if result:
-            print(f"✅ [VK] Успешно опубликовано ({channel_key})")
+            print(f"✅ [VK] Опубликовано ({channel_key})")
         else:
             print(f"⚠️ [VK] publish_to_vk вернул False")
+
+        await _send_card_to_admin(image_path, channel_key)
+
     except Exception as e:
         print(f"❌ [VK] Ошибка: {e}")
         import traceback
@@ -473,10 +489,13 @@ async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
             await callback.message.delete()
         except:
             pass
-        # VK синхронно — ждём результата
+
+        # VK-пост + карточка в личку
         await _publish_vk_now(channel_key, post_text, image_path, tg_message.message_id)
+
         await callback.message.answer(
-            f"✅ Опубликовано в TG + VK ({profile['name']})",
+            f"✅ Опубликовано в TG + VK ({profile['name']})\n"
+            f"🖼 Карточка для VK — в личке (вставь вручную)",
             reply_markup=main_menu()
         )
     except Exception as e:
