@@ -21,7 +21,6 @@ TG_LINKS = {
     "ai": "https://t.me/ainavigatorErgo",
 }
 
-# === PROVOD IMAGE (Nano Banana Pro) ===
 PROVOD_IMAGE_MODEL = os.getenv("PROVOD_IMAGE_MODEL", "google/gemini-3-pro-image-preview")
 PROVOD_IMAGE_URL = "https://api.provod.ai/v1/images/generations"
 
@@ -74,7 +73,7 @@ CHANNELS = {
 RUBRICS_CYBER = {
     0: {"key": "threat", "name": "🔥 Угроза недели", "format": "post"},
     1: {"key": "tool", "name": "🛠️ Инструмент дня", "format": "post"},
-    2: {"key": "tips", "name": "💡 Советы по защите", "format": "post"},
+    2: {"key": "meme", "name": "😄 Мем дня", "format": "meme"},
     3: {"key": "news", "name": "📰 Новость + комментарий", "format": "post"},
     4: {"key": "checklist", "name": "✅ Чек-лист", "format": "post"},
     5: {"key": "myth", "name": "🧠 Миф vs Реальность", "format": "longread"},
@@ -84,7 +83,7 @@ RUBRICS_CYBER = {
 RUBRICS_AI = {
     0: {"key": "ai_news", "name": "🔥 AI-новость недели", "format": "post"},
     1: {"key": "ai_tool", "name": "🛠️ AI-инструмент дня", "format": "post"},
-    2: {"key": "ai_case", "name": "🎯 Кейс автоматизации", "format": "post"},
+    2: {"key": "meme", "name": "😄 Мем дня", "format": "meme"},
     3: {"key": "ai_news_comment", "name": "📰 Новость + комментарий", "format": "post"},
     4: {"key": "ai_checklist", "name": "✅ Чек-лист по AI", "format": "post"},
     5: {"key": "ai_myth", "name": "🧠 Миф vs Реальность", "format": "longread"},
@@ -92,13 +91,19 @@ RUBRICS_AI = {
 }
 
 BRAND_HASHTAGS = {"cyber": "#CyberGuardianSec", "ai": "#AINavigator"}
+
 RUBRIC_HASHTAGS = {
-    "cyber": {"threat": "#угроза", "tool": "#инструмент", "tips": "#совет",
-              "news": "#новость", "checklist": "#чеклист", "myth": "#миф", "free": "#разбор"},
-    "ai": {"ai_news": "#AIновость", "ai_tool": "#AIинструмент", "ai_case": "#AIкейс",
-           "ai_news_comment": "#AIновость", "ai_checklist": "#AIчеклист",
-           "ai_myth": "#AIмиф", "ai_free": "#AIразбор"},
+    "cyber": {
+        "threat": "#угроза", "tool": "#инструмент", "meme": "#мем",
+        "news": "#новость", "checklist": "#чеклист", "myth": "#миф", "free": "#разбор",
+    },
+    "ai": {
+        "ai_news": "#AIновость", "ai_tool": "#AIинструмент", "meme": "#мем",
+        "ai_news_comment": "#AIновость", "ai_checklist": "#AIчеклист",
+        "ai_myth": "#AIмиф", "ai_free": "#AIразбор",
+    },
 }
+
 GENERAL_HASHTAGS = {"cyber": "#кибербезопасность", "ai": "#нейросети"}
 
 TOPIC_HASHTAG_POOL = {
@@ -141,6 +146,28 @@ PALETTES = {
     ],
 }
 
+# Акцентный цвет по рубрике — для визуальной узнаваемости
+RUBRIC_ACCENTS = {
+    "cyber": {
+        "threat": (255, 80, 80),
+        "tool": (80, 150, 255),
+        "meme": (255, 200, 80),
+        "news": (0, 200, 255),
+        "checklist": (100, 220, 100),
+        "myth": (200, 100, 255),
+        "free": (0, 255, 150),
+    },
+    "ai": {
+        "ai_news": (255, 80, 80),
+        "ai_tool": (80, 150, 255),
+        "meme": (255, 200, 80),
+        "ai_news_comment": (0, 220, 220),
+        "ai_checklist": (100, 220, 100),
+        "ai_myth": (200, 100, 255),
+        "ai_free": (0, 255, 130),
+    },
+}
+
 POST_HOOKS = [
     "диалог: короткая реплика. Пример: «— Ты сменил пароль? — Да, на qwerty12345. — Ну ты и...»",
     "цитата: слова знакомого. Пример: «Мой знакомый сказал: “Зачем мне VPN?” — и через месяц его взломали».",
@@ -159,5 +186,5 @@ POST_TEMPLATES = ["story", "breakdown", "checklist", "myth"]
 CARD_TEMPLATES = ["classic", "gradient", "accent", "bottom_up", "magazine"]
 
 RUBRICS = RUBRICS_CYBER
-DEFAULT_SCHEDULE = ["10:00", "19:00"]
+DEFAULT_SCHEDULE = ["09:30", "19:00"]
 TIMEZONE = "Europe/Moscow"
