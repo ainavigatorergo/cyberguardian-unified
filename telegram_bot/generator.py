@@ -12,7 +12,8 @@ from config import (
     POLLINATIONS_API_KEY, PEXELS_API_KEY,
     PROVOD_IMAGE_MODEL, PROVOD_IMAGE_URL,
     BRAND_HASHTAGS, RUBRIC_HASHTAGS, GENERAL_HASHTAGS, TOPIC_HASHTAG_POOL,
-    PALETTES, POST_TEMPLATES, CARD_TEMPLATES, POST_HOOKS, POST_CLOSINGS,
+    PALETTES, RUBRIC_ACCENTS, POST_TEMPLATES, CARD_TEMPLATES,
+    POST_HOOKS, POST_CLOSINGS,
 )
 
 PROVOD_URL = "https://api.provod.ai/v1/chat/completions"
@@ -72,7 +73,7 @@ async def _smart_call(prompt, temperature=0.85):
 
 def parse_post_structure(text):
     result = {"title": "", "intro": "", "details": "", "bonus": "",
-              "bullets": [], "question": "", "hashtags": ""}
+              "bullets": [], "question": "", "hashtags": "", "numbers": []}
     for line in text.split("\n"):
         line = line.strip()
         if not line: continue
@@ -96,6 +97,15 @@ def parse_post_structure(text):
             result["question"] = line.split(":", 1)[1].strip() if ":" in line else ""
         elif u.startswith("ХЕШТЕГ"):
             result["hashtags"] = line.split(":", 1)[1].strip() if ":" in line else ""
+
+    # Извлекаем проценты для инфографики
+    full_text = " ".join([result["intro"], result["details"], " ".join(result["bullets"])])
+    percents = re.findall(r'(\d+[\.,]?\d*)\s*%', full_text)
+    if len(percents) >= 2:
+        try:
+            result["numbers"] = [float(p.replace(',', '.')) for p in percents[:3]]
+        except:
+            result["numbers"] = []
     return result
 
 
@@ -168,7 +178,7 @@ POST_TEMPLATE_PROMPTS = {
 }
 
 
-async def generate_post(topic, channel_key, rubric=None):
+async def generate_post(topic, channel_key, rubric=None, is_series=False):
     profile = CHANNELS[channel_key]
     author = profile["author"]
     rubric_block = f"Рубрика: {rubric['name']}" if rubric else ""
@@ -177,6 +187,15 @@ async def generate_post(topic, channel_key, rubric=None):
     template_hint = POST_TEMPLATE_PROMPTS.get(template, "")
     hook = random.choice(POST_HOOKS)
     closing = random.choice(POST_CLOSINGS)
+
+    series_hint = ""
+    if is_series:
+        series_hint = """
+=== СЕРИЙНОСТЬ (ОБЯЗАТЕЛЬНО) ===
+Это продолжение серии постов. Начни ВСТУПЛЕНИЕ с фразы:
+«В прошлый вторник мы разбирали похожую тему. Сегодня — продолжение.»
+Затем свяжи текущую тему с предыдущей.
+"""
 
     fixed_tags = _get_fixed_hashtags(channel_key, rubric)
     pool_sample = _get_topic_pool(channel_key, count=35)
@@ -197,12 +216,12 @@ async def generate_post(topic, channel_key, rubric=None):
 
 {template_hint}
 
-=== ХУК ОТКРЫТИЯ (обязательно) ===
+=== ХУК ОТКРЫТИЯ ===
 Используй приём: {hook}
 
-=== ИНТЕРАКТИВ В КОНЦЕ (обязательно) ===
+=== ИНТЕРАКТИВ В КОНЦЕ ===
 В конце используй: {closing}
-
+{series_hint}
 === ПРАВИЛА ЧЕЛОВЕЧНОСТИ ===
 1. От первого лица: «я», «мне», «по моему опыту».
 2. Личная история или пример (с именем или местом).
@@ -217,7 +236,7 @@ async def generate_post(topic, channel_key, rubric=None):
 
 === ФОРМАТ ОТВЕТА СТРОГО ===
 ЗАГОЛОВОК: [до 60 символов, без эмодзи]
-ВСТУПЛЕНИЕ: [2 предложения с хуком, 200–250 символов]
+ВСТУПЛЕНИЕ: [2 предложения, 200–250 символов]
 ПОДРОБНЕЕ: [3–4 предложения, 350–450 символов]
 ПУНКТ 1: [до 80 символов, БЕЗ цифры в начале]
 ПУНКТ 2: [до 80 символов, БЕЗ цифры в начале]
@@ -239,7 +258,7 @@ async def generate_post(topic, channel_key, rubric=None):
     parsed = parse_post_structure(raw)
 
     if not parsed["title"] or len(parsed["bullets"]) < 2:
-        return raw, {"title": topic, "bullets": [], "intro": "", "details": "", "bonus": "", "question": "", "hashtags": ""}
+        return raw, {"title": topic, "bullets": [], "intro": "", "details": "", "bonus": "", "question": "", "hashtags": "", "numbers": []}
 
     existing_tags = parsed.get("hashtags", "").split()
     if len(existing_tags) < 10:
@@ -257,8 +276,38 @@ async def generate_post(topic, channel_key, rubric=None):
     return build_post_text(parsed), parsed
 
 
+async def generate_meme(topic, channel_key):
+    """Лёгкий ироничный пост-мем."""
+    prompt = f"""Ты — Егор, автор канала. Сделай КОРОТКИЙ ироничный пост-мем.
+
+Тема: {topic}
+
+ТРЕБОВАНИЯ:
+1. Длина: 200-300 символов.
+2. Формат «Ожидание / Реальность» ИЛИ короткая шутка с иронией.
+3. Первая строка — цепляющая, с эмодзи.
+4. В конце — короткий вопрос к читателям.
+5. Без AI-шаблонов, живо и с юмором.
+
+ФОРМАТ ОТВЕТА СТРОГО:
+ЗАГОЛОВОК: [цепляющий, с эмодзи, до 60 символов]
+ВСТУПЛЕНИЕ: [2-3 строки мема, 150-200 символов]
+ПОДРОБНЕЕ: [короткая шутка или завершение, 100-150 символов]
+ПУНКТ 1: [пустая строка]
+ПУНКТ 2: [пустая строка]
+ПУНКТ 3: [пустая строка]
+БОНУС: [пустая строка]
+ВОПРОС: [короткий вопрос, до 70 символов]
+ХЕШТЕГИ: [#мем #кибербезопасность #CyberGuardianSec #юмор]"""
+    try:
+        raw = await _smart_call(prompt, temperature=0.9)
+        return raw
+    except Exception as e:
+        print(f"   ⚠️ Мем: {e}")
+        return f"😄 Мем дня\n\nКогда сменил пароль на надёжный, но забыл его.\n\nА вы как храните пароли?\n\n#мем #кибербезопасность"
+
+
 async def generate_vk_version(post_text, channel_key):
-    """Короткая версия для VK. БЕЗ ссылок — их добавит код."""
     prompt = f"""Сократи пост для VK. Аудитория VK не читает длинные тексты.
 
 Исходный пост:
@@ -266,17 +315,16 @@ async def generate_vk_version(post_text, channel_key):
 
 ТРЕБОВАНИЯ:
 1. Длина: 300–500 символов.
-2. ХУК в первой строке (самое важное — сразу).
+2. ХУК в первой строке.
 3. 3–5 хештегов (не больше).
 4. Сохрани главную мысль и эмоцию.
 5. В конце — вопрос к читателям.
 
-КРИТИЧНО ВАЖНО:
-- НЕ вставляй ссылки на каналы, Telegram, t.me и т.п. — я добавлю их сам.
+КРИТИЧНО:
+- НЕ вставляй ссылки на каналы, Telegram, t.me — я добавлю сам.
 - НЕ вставляй название канала (@...).
-- Только текст поста и хештеги.
 
-Формат ответа — только готовый текст поста."""
+Формат — только готовый текст."""
     try:
         return await _smart_call(prompt, temperature=0.7)
     except Exception as e:
@@ -324,21 +372,19 @@ async def generate_poll(topic, channel_key):
 
 
 # ============================================================
-# PROVOD IMAGE (Nano Banana Pro)
+# ФОНЫ
 # ============================================================
 
 async def _build_image_prompt(post_text, channel_key):
     if channel_key == "cyber":
         style_context = (
             "Cybersecurity topic. Dark, cinematic, professional photography. "
-            "Colors: deep navy blue, dark tones with neon green or cyan accents. "
-            "Style: like a photo from a professional IT/security magazine."
+            "Colors: deep navy blue, dark tones with neon green or cyan accents."
         )
     else:
         style_context = (
             "AI/technology topic. Cinematic, professional photography, futuristic. "
-            "Colors: dark purple, deep blue with neon green or cyan accents. "
-            "Style: like a photo from a tech magazine."
+            "Colors: dark purple, deep blue with neon green or cyan accents."
         )
     prompt = f"""Проанализируй пост и составь ОДИН детальный промт для фоновой картинки (на английском).
 
@@ -349,13 +395,12 @@ async def _build_image_prompt(post_text, channel_key):
 
 ТРЕБОВАНИЯ:
 1. Конкретный сюжет (что на фото).
-2. Настроение.
-3. Стиль (cinematic / minimalist / tech photography).
-4. Композиция с пустым местом сверху и снизу.
-5. НИКАКОГО ТЕКСТА на картинке.
-6. Размер: квадрат.
+2. Стиль (cinematic / minimalist / tech photography).
+3. Композиция с пустым местом сверху и снизу.
+4. НИКАКОГО ТЕКСТА на картинке.
+5. Размер: квадрат.
 
-ФОРМАТ — только промт на английском, одной строкой, до 400 символов."""
+ФОРМАТ — только промт на английском, до 400 символов."""
     try:
         result = await _smart_call(prompt, temperature=0.6)
         result = result.strip().replace("\n", " ")
@@ -555,6 +600,32 @@ def _brand_plate(draw, W, H, accent, brand):
     draw.text((x1 + 30, y1 + 30), brand, font=font_brand, fill=accent)
     font_quote = _find_font(18)
     draw.text((x1 + 30, y1 + 72), "Егор, автор канала", font=font_quote, fill=(150, 150, 150))
+
+
+def _draw_chart_pil(draw, W, H, numbers, accent):
+    """Рисует столбики для инфографики в правой части."""
+    if not numbers or len(numbers) < 2:
+        return
+    nums = numbers[:3]
+    max_val = max(nums) if nums else 1
+    chart_w = 350
+    chart_x = W - chart_w - 40
+    chart_y = 200
+    chart_h = 280
+    bar_w = int((chart_w - 40 * (len(nums) - 1)) / len(nums))
+    if bar_w < 20: bar_w = 20
+
+    for i, num in enumerate(nums):
+        x = chart_x + i * (bar_w + 40)
+        bar_h = int((num / max_val) * (chart_h - 60))
+        y = chart_y + (chart_h - bar_h) - 60
+        draw.rectangle([x, y, x + bar_w, chart_y + chart_h - 60], fill=accent)
+        font_v = _find_font(28, bold=True)
+        try:
+            bb = draw.textbbox((0, 0), f"{int(num)}%", font=font_v)
+            tw = bb[2] - bb[0]
+        except: tw = 40
+        draw.text((x + (bar_w - tw) // 2, y - 40), f"{int(num)}%", font=font_v, fill=accent)
 
 
 def _card_classic(bg, parsed, channel_key, palette, brand, accent):
@@ -799,27 +870,97 @@ def _card_magazine(bg, parsed, channel_key, palette, brand, accent):
     return bg
 
 
+def _card_meme(bg, parsed, channel_key, palette, brand, accent):
+    """Мем-карточка: крупный текст в центре, яркий фон."""
+    W, H = 1080, 1080
+    bg = bg.resize((W, H)).convert("RGB")
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ov = ImageDraw.Draw(overlay)
+    ov.rectangle([0, 0, W, H], fill=(0, 0, 0, 190))
+    bg = Image.alpha_composite(bg.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(bg)
+    pad = SAFE + 40
+
+    title = _remove_emoji(parsed.get("title", "")).upper() or "МЕМ ДНЯ"
+    font_t = _find_font(56, bold=True)
+    y = 200
+    for line in _wrap_text(title, font_t, W - 2 * pad, draw)[:3]:
+        try:
+            bb = draw.textbbox((0, 0), line, font=font_t); lw = bb[2] - bb[0]
+        except: lw = 0
+        x = (W - lw) // 2
+        draw.text((x, y), line, font=font_t, fill=(0,0,0), stroke_width=6, stroke_fill=(0,0,0))
+        draw.text((x, y), line, font=font_t, fill=accent)
+        y += 74
+
+    y += 60
+    intro = parsed.get("intro", "")
+    if intro:
+        font_b = _find_font(48, bold=True)
+        for line in _wrap_text(intro, font_b, W - 2 * pad, draw)[:4]:
+            try:
+                bb = draw.textbbox((0, 0), line, font=font_b); lw = bb[2] - bb[0]
+            except: lw = 0
+            x = (W - lw) // 2
+            draw.text((x, y), line, font=font_b, fill=(255, 255, 255), stroke_width=4, stroke_fill=(0,0,0))
+            y += 64
+
+    emoji = _extract_emoji(parsed.get("title", ""))
+    if emoji:
+        font_e = _find_font(160)
+        try:
+            bb = draw.textbbox((0, 0), emoji, font=font_e); bw = bb[2] - bb[0]
+            draw.text(((W - bw) // 2, H - 400), emoji, font=font_e)
+        except: pass
+
+    _brand_plate(draw, W, H, accent, brand)
+    return bg
+
+
 CARD_FUNCS = {
     "classic": _card_classic,
     "gradient": _card_gradient,
     "accent": _card_accent,
     "bottom_up": _card_bottom_up,
     "magazine": _card_magazine,
+    "meme": _card_meme,
 }
 
 
-async def generate_image(parsed, channel_key="cyber"):
+async def generate_image(parsed, channel_key="cyber", rubric=None):
     try:
         bg, source = await _get_background(parsed, channel_key)
         print(f"   📷 Фон: {source}")
+
+        # Выбор палитры
         palette = random.choice(PALETTES.get(channel_key, PALETTES["cyber"]))
-        accent = palette["accent"]
+        # Если есть рубрика — берём её акцент
+        if rubric:
+            accent = RUBRIC_ACCENTS.get(channel_key, {}).get(rubric.get("key", ""), palette["accent"])
+        else:
+            accent = palette["accent"]
+
         brand = "CyberGuardianSec" if channel_key == "cyber" else "AI Navigator"
         if bg is None:
             bg = _make_gradient(1080, 1080, palette["bg_top"], palette["bg_bottom"])
-        template = random.choice(CARD_TEMPLATES)
-        print(f"   🎨 Шаблон: {template}")
+
+        # Мем — всегда meme шаблон
+        if rubric and rubric.get("format") == "meme":
+            template = "meme"
+        else:
+            template = random.choice(CARD_TEMPLATES)
+
+        print(f"   🎨 Шаблон: {template}, accent: {accent}")
+
         card = CARD_FUNCS[template](bg, parsed, channel_key, palette, brand, accent)
+
+        # Инфографика: если есть 2+ процента, рисуем столбики
+        numbers = parsed.get("numbers", []) if parsed else []
+        if numbers and len(numbers) >= 2 and template not in ["meme"]:
+            print(f"   📊 Рисую инфографику: {numbers}")
+            draw = ImageDraw.Draw(card)
+            _draw_chart_pil(draw, 1080, 1080, numbers, accent)
+
         filename = f"{channel_key}_{template}_{abs(hash(parsed.get('title','') + str(random.randint(1,99999)))) % 100000}.png"
         filepath = os.path.join(IMAGES_DIR, filename)
         card.save(filepath, "PNG")
@@ -827,6 +968,8 @@ async def generate_image(parsed, channel_key="cyber"):
         return filepath
     except Exception as e:
         print(f"   ⚠️ Визуал: {e}")
+        import traceback
+        traceback.print_exc()
         return ""
 
 
