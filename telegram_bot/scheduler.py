@@ -91,6 +91,7 @@ async def _publish_vk(bot, channel_key, post_text, image_path, tg_message_id):
 
 
 async def publish_rubric_post(bot, channel_key: str, is_series=False):
+    """Обычный пост по рубрике дня. Если is_series=True — добавляет связку с прошлым постом."""
     profile = CHANNELS[channel_key]
     emoji = "🔐" if channel_key == "cyber" else "🤖"
     weekday = datetime.now().weekday()
@@ -121,16 +122,7 @@ async def publish_rubric_post(bot, channel_key: str, is_series=False):
     try:
         fmt = rubric.get("format", "post")
 
-        # МЕМ
-        if fmt == "meme":
-            post_text = await generate_meme(topic, channel_key)
-            parsed = {"title": "Мем дня", "intro": post_text[:200], "details": "", "bullets": [], "bonus": "", "question": "", "hashtags": "#мем", "numbers": []}
-            image_path = await generate_image(parsed, channel_key, rubric)
-            tg_message = await bot.send_photo(profile["telegram_channel"], FSInputFile(image_path), caption=post_text)
-            increment_post_count()
-            await _publish_vk(bot, channel_key, post_text, image_path, tg_message.message_id)
-
-        elif fmt == "poll":
+        if fmt == "poll":
             poll_data = await generate_poll(topic, channel_key)
             await bot.send_poll(
                 chat_id=profile["telegram_channel"],
@@ -174,27 +166,102 @@ async def publish_rubric_post(bot, channel_key: str, is_series=False):
         traceback.print_exc()
 
 
+async def publish_meme(bot, channel_key: str):
+    """Мем дня — только среда 14:00."""
+    profile = CHANNELS[channel_key]
+    emoji = "🔐" if channel_key == "cyber" else "🤖"
+    print(f"\n{emoji} === {channel_key} | 😄 МЕМ ДНЯ ===")
+
+    used_data = load_used_topics()
+    used_list = used_data.get(channel_key, [])
+    available = [t for t in profile["topics"] if t not in used_list]
+    if not available:
+        available = profile["topics"]
+
+    topic = available[0] if available else "пароли"
+    print(f"📝 Тема мема: {topic}")
+
+    try:
+        post_text = await generate_meme(topic, channel_key)
+        print(f"✅ Мем: {len(post_text)} символов")
+
+        parsed = {
+            "title": "😄 Мем дня",
+            "intro": post_text,
+            "details": "",
+            "bullets": [],
+            "bonus": "",
+            "question": "",
+            "hashtags": "#мем",
+            "numbers": [],
+        }
+        rubric_meme = {"key": "meme", "name": "😄 Мем дня", "format": "meme"}
+
+        image_path = await generate_image(parsed, channel_key, rubric_meme)
+        print(f"🎨 Карточка мема: {image_path}")
+
+        tg_message = None
+        if image_path and os.path.exists(image_path):
+            tg_message = await bot.send_photo(
+                profile["telegram_channel"],
+                FSInputFile(image_path),
+                caption=post_text
+            )
+        else:
+            tg_message = await bot.send_message(profile["telegram_channel"], post_text)
+        increment_post_count()
+
+        await _publish_vk(bot, channel_key, post_text, image_path, tg_message.message_id)
+
+        # Мем-тема не идёт в used_topics (иначе обычный пост её пропустит)
+    except Exception as e:
+        print(f"❌ Ошибка мема: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 def start_scheduler(bot):
-    # Cyber: 09:30 и 19:00 (вторник вечер — серия)
-    scheduler.add_job(publish_rubric_post, "cron", hour=9, minute=30, args=[bot, "cyber", False], id="cyber_morning")
-    scheduler.add_job(publish_rubric_post, "cron", hour=19, minute=0, args=[bot, "cyber", False], id="cyber_evening")
-    # Cyber: серия — вторник 19:00
-    scheduler.add_job(publish_rubric_post, "cron", day_of_week="tue", hour=19, minute=0, args=[bot, "cyber", True], id="cyber_series")
+    # === ОБЫЧНЫЕ ПОСТЫ (без вторника) ===
+    # Вторник — только серийные посты (ниже)
+    # Остальные дни — обычные
+    days_no_tue = "mon,wed,thu,fri,sat,sun"
 
-    # AI: 11:00 и 20:00 (вторник вечер — серия)
-    scheduler.add_job(publish_rubric_post, "cron", hour=11, minute=0, args=[bot, "ai", False], id="ai_morning")
-    scheduler.add_job(publish_rubric_post, "cron", hour=20, minute=0, args=[bot, "ai", False], id="ai_evening")
-    scheduler.add_job(publish_rubric_post, "cron", day_of_week="tue", hour=20, minute=0, args=[bot, "ai", True], id="ai_series")
+    # Cyber
+    scheduler.add_job(publish_rubric_post, "cron", day_of_week=days_no_tue, hour=9, minute=30,
+                      args=[bot, "cyber", False], id="cyber_morning")
+    scheduler.add_job(publish_rubric_post, "cron", day_of_week=days_no_tue, hour=19, minute=0,
+                      args=[bot, "cyber", False], id="cyber_evening")
 
-    # Мем дня: среда 14:00 (meme включён в RUBRICS для среды)
-    scheduler.add_job(publish_rubric_post, "cron", day_of_week="wed", hour=14, minute=0, args=[bot, "cyber", False], id="cyber_meme")
-    scheduler.add_job(publish_rubric_post, "cron", day_of_week="wed", hour=14, minute=0, args=[bot, "ai", False], id="ai_meme")
+    # AI
+    scheduler.add_job(publish_rubric_post, "cron", day_of_week=days_no_tue, hour=11, minute=0,
+                      args=[bot, "ai", False], id="ai_morning")
+    scheduler.add_job(publish_rubric_post, "cron", day_of_week=days_no_tue, hour=20, minute=0,
+                      args=[bot, "ai", False], id="ai_evening")
+
+    # === ВТОРНИК — СЕРИЙНЫЕ ПОСТЫ ===
+    scheduler.add_job(publish_rubric_post, "cron", day_of_week="tue", hour=9, minute=30,
+                      args=[bot, "cyber", False], id="cyber_tue_morning")
+    scheduler.add_job(publish_rubric_post, "cron", day_of_week="tue", hour=19, minute=0,
+                      args=[bot, "cyber", True], id="cyber_tue_series")
+
+    scheduler.add_job(publish_rubric_post, "cron", day_of_week="tue", hour=11, minute=0,
+                      args=[bot, "ai", False], id="ai_tue_morning")
+    scheduler.add_job(publish_rubric_post, "cron", day_of_week="tue", hour=20, minute=0,
+                      args=[bot, "ai", True], id="ai_tue_series")
+
+    # === МЕМ ДНЯ: среда 14:00 ===
+    scheduler.add_job(publish_meme, "cron", day_of_week="wed", hour=14, minute=0,
+                      args=[bot, "cyber"], id="cyber_meme")
+    scheduler.add_job(publish_meme, "cron", day_of_week="wed", hour=14, minute=0,
+                      args=[bot, "ai"], id="ai_meme")
 
     scheduler.add_job(collect_daily_stats, "cron", hour=23, minute=0, args=[bot], id="daily_stats")
     scheduler.add_job(send_weekly_report, "cron", day_of_week="sun", hour=20, minute=0, args=[bot], id="weekly_report")
     scheduler.add_job(check_all_apis, "interval", hours=1, args=[bot], id="api_monitor")
     scheduler.start()
     print("✅ Планировщик запущен:")
-    print("   Cyber: 09:30, 19:00 (вт — серия)")
-    print("   AI: 11:00, 20:00 (вт — серия)")
+    print("   Cyber: 09:30, 19:00 (пн, ср, чт, пт, сб, вс)")
+    print("   Cyber: 09:30 + 19:00 (вт — серия)")
+    print("   AI: 11:00, 20:00 (пн, ср, чт, пт, сб, вс)")
+    print("   AI: 11:00 + 20:00 (вт — серия)")
     print("   Мем: среда 14:00 (оба канала)")
