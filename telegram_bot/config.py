@@ -70,10 +70,11 @@ CHANNELS = {
     },
 }
 
+# === РУБРИКИ (без мема — мем отдельным job в 14:00 среды) ===
 RUBRICS_CYBER = {
     0: {"key": "threat", "name": "🔥 Угроза недели", "format": "post"},
     1: {"key": "tool", "name": "🛠️ Инструмент дня", "format": "post"},
-    2: {"key": "meme", "name": "😄 Мем дня", "format": "meme"},
+    2: {"key": "tips", "name": "💡 Советы по защите", "format": "post"},
     3: {"key": "news", "name": "📰 Новость + комментарий", "format": "post"},
     4: {"key": "checklist", "name": "✅ Чек-лист", "format": "post"},
     5: {"key": "myth", "name": "🧠 Миф vs Реальность", "format": "longread"},
@@ -83,7 +84,7 @@ RUBRICS_CYBER = {
 RUBRICS_AI = {
     0: {"key": "ai_news", "name": "🔥 AI-новость недели", "format": "post"},
     1: {"key": "ai_tool", "name": "🛠️ AI-инструмент дня", "format": "post"},
-    2: {"key": "meme", "name": "😄 Мем дня", "format": "meme"},
+    2: {"key": "ai_case", "name": "🎯 Кейс автоматизации", "format": "post"},
     3: {"key": "ai_news_comment", "name": "📰 Новость + комментарий", "format": "post"},
     4: {"key": "ai_checklist", "name": "✅ Чек-лист по AI", "format": "post"},
     5: {"key": "ai_myth", "name": "🧠 Миф vs Реальность", "format": "longread"},
@@ -94,11 +95,11 @@ BRAND_HASHTAGS = {"cyber": "#CyberGuardianSec", "ai": "#AINavigator"}
 
 RUBRIC_HASHTAGS = {
     "cyber": {
-        "threat": "#угроза", "tool": "#инструмент", "meme": "#мем",
+        "threat": "#угроза", "tool": "#инструмент", "tips": "#совет",
         "news": "#новость", "checklist": "#чеклист", "myth": "#миф", "free": "#разбор",
     },
     "ai": {
-        "ai_news": "#AIновость", "ai_tool": "#AIинструмент", "meme": "#мем",
+        "ai_news": "#AIновость", "ai_tool": "#AIинструмент", "ai_case": "#AIкейс",
         "ai_news_comment": "#AIновость", "ai_checklist": "#AIчеклист",
         "ai_myth": "#AIмиф", "ai_free": "#AIразбор",
     },
@@ -146,25 +147,26 @@ PALETTES = {
     ],
 }
 
-# Акцентный цвет по рубрике — для визуальной узнаваемости
 RUBRIC_ACCENTS = {
     "cyber": {
         "threat": (255, 80, 80),
         "tool": (80, 150, 255),
-        "meme": (255, 200, 80),
+        "tips": (100, 220, 100),
         "news": (0, 200, 255),
         "checklist": (100, 220, 100),
         "myth": (200, 100, 255),
         "free": (0, 255, 150),
+        "meme": (255, 200, 80),
     },
     "ai": {
         "ai_news": (255, 80, 80),
         "ai_tool": (80, 150, 255),
-        "meme": (255, 200, 80),
+        "ai_case": (100, 220, 100),
         "ai_news_comment": (0, 220, 220),
         "ai_checklist": (100, 220, 100),
         "ai_myth": (200, 100, 255),
         "ai_free": (0, 255, 130),
+        "meme": (255, 200, 80),
     },
 }
 
