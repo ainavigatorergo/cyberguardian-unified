@@ -28,6 +28,8 @@ os.makedirs(IMAGES_DIR, exist_ok=True)
 USED_TOPICS_FILE = os.path.join(DATA_DIR, "used_topics.json")
 
 SAFE_ZONE = 110
+# Плашка бренда занимает H-130..H-20. Все тексты не должны идти ниже H-160.
+TEXT_BOTTOM_LIMIT = 160
 
 
 def load_used_topics():
@@ -98,7 +100,6 @@ def parse_post_structure(text):
         elif u.startswith("ХЕШТЕГ"):
             result["hashtags"] = line.split(":", 1)[1].strip() if ":" in line else ""
 
-    # Извлекаем проценты для инфографики
     full_text = " ".join([result["intro"], result["details"], " ".join(result["bullets"])])
     percents = re.findall(r'(\d+[\.,]?\d*)\s*%', full_text)
     if len(percents) >= 2:
@@ -277,7 +278,6 @@ async def generate_post(topic, channel_key, rubric=None, is_series=False):
 
 
 async def generate_meme(topic, channel_key):
-    """Лёгкий ироничный пост-мем."""
     prompt = f"""Ты — Егор, автор канала. Сделай КОРОТКИЙ ироничный пост-мем.
 
 Тема: {topic}
@@ -603,9 +603,7 @@ def _brand_plate(draw, W, H, accent, brand):
 
 
 def _draw_chart_pil(draw, W, H, numbers, accent):
-    """Рисует столбики для инфографики в правой части."""
-    if not numbers or len(numbers) < 2:
-        return
+    if not numbers or len(numbers) < 2: return
     nums = numbers[:3]
     max_val = max(nums) if nums else 1
     chart_w = 350
@@ -614,7 +612,6 @@ def _draw_chart_pil(draw, W, H, numbers, accent):
     chart_h = 280
     bar_w = int((chart_w - 40 * (len(nums) - 1)) / len(nums))
     if bar_w < 20: bar_w = 20
-
     for i, num in enumerate(nums):
         x = chart_x + i * (bar_w + 40)
         bar_h = int((num / max_val) * (chart_h - 60))
@@ -627,6 +624,10 @@ def _draw_chart_pil(draw, W, H, numbers, accent):
         except: tw = 40
         draw.text((x + (bar_w - tw) // 2, y - 40), f"{int(num)}%", font=font_v, fill=accent)
 
+
+# ============================================================
+# 6 ШАБЛОНОВ КАРТОЧЕК (текст не ниже H-160)
+# ============================================================
 
 def _card_classic(bg, parsed, channel_key, palette, brand, accent):
     W, H = 1080, 1080
@@ -659,7 +660,7 @@ def _card_classic(bg, parsed, channel_key, palette, brand, accent):
         y += size + 16
     bullets = parsed.get("bullets", [])[:3] or ["Подробности в посте", "Читай ниже", "Подпишись"]
     font_b = _find_font(34); font_n = _find_font(30, bold=True)
-    y = H - 560
+    y = H - 600
     for i, b in enumerate(bullets, 1):
         bc = _remove_emoji(b) or "..."
         cx, cy = pad + 26, y + 26
@@ -711,7 +712,10 @@ def _card_gradient(bg, parsed, channel_key, palette, brand, accent):
     bullets = parsed.get("bullets", [])[:3]
     font_b = _find_font(28)
     y += 30
+    # Ограничение: не ниже H - TEXT_BOTTOM_LIMIT
     for b in bullets:
+        if y + 44 > H - TEXT_BOTTOM_LIMIT:
+            break
         bc = _remove_emoji(b)
         if not bc: continue
         draw.text((pad, y), f"— {bc}", font=font_b, fill=accent, stroke_width=2, stroke_fill=(0,0,0))
@@ -727,19 +731,19 @@ def _card_accent(bg, parsed, channel_key, palette, brand, accent):
     overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     ov = ImageDraw.Draw(overlay)
     ov.rectangle([0, 0, W, H], fill=(0, 0, 0, 180))
-    ov.rectangle([0, H - 300, W, H], fill=(0, 0, 0, 230))
+    ov.rectangle([0, H - 340, W, H], fill=(0, 0, 0, 230))
     bg = Image.alpha_composite(bg.convert("RGBA"), overlay).convert("RGB")
     draw = ImageDraw.Draw(bg)
     emoji = _extract_emoji(parsed.get("title", ""))
     y = SAFE + 40
     if emoji:
-        font_big = _find_font(200)
+        font_big = _find_font(180)
         try:
             bb = draw.textbbox((0, 0), emoji, font=font_big)
             bw = bb[2] - bb[0]
             draw.text(((W - bw) // 2, y), emoji, font=font_big)
         except: pass
-        y += 240
+        y += 220
     title = _remove_emoji(parsed.get("title", "")) or "Без заголовка"
     size = 54
     lines = []
@@ -758,8 +762,11 @@ def _card_accent(bg, parsed, channel_key, palette, brand, accent):
         y += size + 16
     bullets = parsed.get("bullets", [])[:3]
     font_b = _find_font(28)
-    y = H - 280
+    # Пункты с H-340, 3 × 42 = 126 → H-214. Плашка с H-130. Отступ 84px.
+    y = H - 340
     for b in bullets[:3]:
+        if y + 42 > H - TEXT_BOTTOM_LIMIT:
+            break
         bc = _remove_emoji(b)
         if not bc: continue
         draw.text((SAFE, y), f"• {bc}", font=font_b, fill=accent)
@@ -775,7 +782,7 @@ def _card_bottom_up(bg, parsed, channel_key, palette, brand, accent):
     overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     ov = ImageDraw.Draw(overlay)
     ov.rectangle([0, 0, W, 520], fill=(0, 0, 0, 195))
-    ov.rectangle([0, H - 520, W, H], fill=(0, 0, 0, 225))
+    ov.rectangle([0, H - 620, W, H], fill=(0, 0, 0, 225))
     bg = Image.alpha_composite(bg.convert("RGBA"), overlay).convert("RGB")
     draw = ImageDraw.Draw(bg)
     pad = SAFE
@@ -796,7 +803,8 @@ def _card_bottom_up(bg, parsed, channel_key, palette, brand, accent):
             y += 46
         y += 14
     emoji = _extract_emoji(parsed.get("title", ""))
-    y = H - 430
+    # Поднимаем заголовок ниже: H-540 вместо H-430, при эмодзи — H-640
+    y = H - 640
     if emoji:
         font_e = _find_font(80)
         draw.text((pad, y), emoji, font=font_e)
@@ -810,6 +818,8 @@ def _card_bottom_up(bg, parsed, channel_key, palette, brand, accent):
         if len(lines) <= 3:
             break
     for line in lines[:3]:
+        if y + size > H - TEXT_BOTTOM_LIMIT:
+            break
         draw.text((pad, y), line, font=font_t, fill=(0,0,0), stroke_width=6, stroke_fill=(0,0,0))
         draw.text((pad, y), line, font=font_t, fill=(255, 255, 255))
         y += size + 16
@@ -824,8 +834,8 @@ def _card_magazine(bg, parsed, channel_key, palette, brand, accent):
     overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     ov = ImageDraw.Draw(overlay)
     ov.rectangle([0, 0, W, 220], fill=(0, 0, 0, 220))
-    ov.rectangle([0, 220, W, H - 220], fill=(0, 0, 0, 145))
-    ov.rectangle([0, H - 220, W, H], fill=(0, 0, 0, 220))
+    ov.rectangle([0, 220, W, H - 260], fill=(0, 0, 0, 145))
+    ov.rectangle([0, H - 260, W, H], fill=(0, 0, 0, 220))
     bg = Image.alpha_composite(bg.convert("RGBA"), overlay).convert("RGB")
     draw = ImageDraw.Draw(bg)
     pad = SAFE
@@ -834,14 +844,14 @@ def _card_magazine(bg, parsed, channel_key, palette, brand, accent):
     draw.text((pad, SAFE - 20), cat, font=font_cat, fill=accent)
     draw.line([(pad, SAFE + 30), (W - pad, SAFE + 30)], fill=accent, width=3)
     emoji = _extract_emoji(parsed.get("title", ""))
-    y = SAFE + 160
+    y = SAFE + 140
     if emoji:
-        font_e = _find_font(120)
+        font_e = _find_font(110)
         try:
             bb = draw.textbbox((0, 0), emoji, font=font_e); bw = bb[2] - bb[0]
             draw.text(((W - bw) // 2, y), emoji, font=font_e)
         except: pass
-        y += 150
+        y += 140
     title = _remove_emoji(parsed.get("title", "")) or "Без заголовка"
     size = 68
     lines = []
@@ -851,6 +861,8 @@ def _card_magazine(bg, parsed, channel_key, palette, brand, accent):
         if len(lines) <= 4:
             break
     for line in lines[:4]:
+        if y + size > H - 320:
+            break
         try:
             bb = draw.textbbox((0, 0), line, font=font_t); lw = bb[2] - bb[0]
         except: lw = 0
@@ -861,9 +873,12 @@ def _card_magazine(bg, parsed, channel_key, palette, brand, accent):
     bullets = parsed.get("bullets", [])[:3]
     font_b = _find_font(26, bold=True)
     if bullets:
-        y = H - SAFE - 70
+        # Пункты с H-240 (было H-180). 2 строки × 36 = 72 → H-168. Плашка с H-130. Отступ 38px.
+        y = H - 240
         text = " • ".join([_remove_emoji(b)[:30] for b in bullets if b])
         for line in _wrap_text(text, font_b, W - 2 * pad, draw)[:2]:
+            if y + 36 > H - TEXT_BOTTOM_LIMIT:
+                break
             draw.text((pad, y), line, font=font_b, fill=accent)
             y += 36
     _brand_plate(draw, W, H, accent, brand)
@@ -871,7 +886,6 @@ def _card_magazine(bg, parsed, channel_key, palette, brand, accent):
 
 
 def _card_meme(bg, parsed, channel_key, palette, brand, accent):
-    """Мем-карточка: крупный текст в центре, яркий фон."""
     W, H = 1080, 1080
     bg = bg.resize((W, H)).convert("RGB")
     overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -898,6 +912,8 @@ def _card_meme(bg, parsed, channel_key, palette, brand, accent):
     if intro:
         font_b = _find_font(48, bold=True)
         for line in _wrap_text(intro, font_b, W - 2 * pad, draw)[:4]:
+            if y + 64 > H - 300:
+                break
             try:
                 bb = draw.textbbox((0, 0), line, font=font_b); lw = bb[2] - bb[0]
             except: lw = 0
@@ -932,9 +948,7 @@ async def generate_image(parsed, channel_key="cyber", rubric=None):
         bg, source = await _get_background(parsed, channel_key)
         print(f"   📷 Фон: {source}")
 
-        # Выбор палитры
         palette = random.choice(PALETTES.get(channel_key, PALETTES["cyber"]))
-        # Если есть рубрика — берём её акцент
         if rubric:
             accent = RUBRIC_ACCENTS.get(channel_key, {}).get(rubric.get("key", ""), palette["accent"])
         else:
@@ -944,7 +958,6 @@ async def generate_image(parsed, channel_key="cyber", rubric=None):
         if bg is None:
             bg = _make_gradient(1080, 1080, palette["bg_top"], palette["bg_bottom"])
 
-        # Мем — всегда meme шаблон
         if rubric and rubric.get("format") == "meme":
             template = "meme"
         else:
@@ -954,10 +967,9 @@ async def generate_image(parsed, channel_key="cyber", rubric=None):
 
         card = CARD_FUNCS[template](bg, parsed, channel_key, palette, brand, accent)
 
-        # Инфографика: если есть 2+ процента, рисуем столбики
         numbers = parsed.get("numbers", []) if parsed else []
         if numbers and len(numbers) >= 2 and template not in ["meme"]:
-            print(f"   📊 Рисую инфографику: {numbers}")
+            print(f"   📊 Инфографика: {numbers}")
             draw = ImageDraw.Draw(card)
             _draw_chart_pil(draw, 1080, 1080, numbers, accent)
 
