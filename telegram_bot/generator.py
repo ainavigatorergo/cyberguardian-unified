@@ -28,7 +28,6 @@ os.makedirs(IMAGES_DIR, exist_ok=True)
 USED_TOPICS_FILE = os.path.join(DATA_DIR, "used_topics.json")
 
 SAFE_ZONE = 110
-# Плашка бренда занимает H-130..H-20. Все тексты не должны идти ниже H-160.
 TEXT_BOTTOM_LIMIT = 160
 
 
@@ -63,43 +62,100 @@ async def _smart_call(prompt, temperature=0.85):
         try:
             return await _call_api(PROVOD_URL, PROVOD_API_KEY, model, prompt, temperature)
         except Exception as e:
-            print(f"   ⚠️ provod [{model}]: {str(e)[:80]}")
+            print(f"   ⚠️ provod [{model}]: {str(e)[:80]}", flush=True)
     if OPENROUTER_API_KEY:
         for model in OPENROUTER_MODELS:
             try:
                 return await _call_api(OPENROUTER_URL, OPENROUTER_API_KEY, model, prompt, temperature)
             except Exception as e:
-                print(f"   ⚠️ OR [{model}]: {str(e)[:80]}")
+                print(f"   ⚠️ OR [{model}]: {str(e)[:80]}", flush=True)
     raise Exception("Все модели недоступны")
+
+
+def _clean_label(line: str) -> str:
+    """Убирает **, ##, ###, __, бэктики, лишние пробелы из строки."""
+    line = line.strip()
+    line = re.sub(r'^[\*#_`\s]+', '', line)
+    line = re.sub(r'[\*#_`\s]+$', '', line)
+    return line.strip()
 
 
 def parse_post_structure(text):
     result = {"title": "", "intro": "", "details": "", "bonus": "",
-              "bullets": [], "question": "", "hashtags": "", "numbers": []}
+              "bullets": [], "question": "", "hashtags": "", "numbers": [],
+              "_parse_failed": False}
+
+    en_ru_map = {
+        "TITLE": "ЗАГОЛОВОК",
+        "INTRO": "ВСТУПЛЕНИЕ",
+        "INTRODUCTION": "ВСТУПЛЕНИЕ",
+        "DETAILS": "ПОДРОБНЕЕ",
+        "DETAIL": "ПОДРОБНЕЕ",
+        "BREAKDOWN": "РАЗБОР",
+        "BONUS": "БОНУС",
+        "POINT 1": "ПУНКТ 1",
+        "POINT 2": "ПУНКТ 2",
+        "POINT 3": "ПУНКТ 3",
+        "POINT1": "ПУНКТ 1",
+        "POINT2": "ПУНКТ 2",
+        "POINT3": "ПУНКТ 3",
+        "TIP 1": "СОВЕТ 1",
+        "TIP 2": "СОВЕТ 2",
+        "TIP 3": "СОВЕТ 3",
+        "TIP1": "СОВЕТ 1",
+        "TIP2": "СОВЕТ 2",
+        "TIP3": "СОВЕТ 3",
+        "QUESTION": "ВОПРОС",
+        "HASHTAGS": "ХЕШТЕГИ",
+        "TAGS": "ХЕШТЕГИ",
+    }
+
     for line in text.split("\n"):
         line = line.strip()
-        if not line: continue
-        u = line.upper()
-        if u.startswith("ЗАГОЛОВОК"):
-            result["title"] = line.split(":", 1)[1].strip() if ":" in line else ""
-        elif u.startswith("ВСТУПЛЕНИЕ"):
-            result["intro"] = line.split(":", 1)[1].strip() if ":" in line else ""
-        elif u.startswith("ПОДРОБНЕЕ") or u.startswith("РАЗБОР"):
-            result["details"] = line.split(":", 1)[1].strip() if ":" in line else ""
-        elif u.startswith("БОНУС"):
-            result["bonus"] = line.split(":", 1)[1].strip() if ":" in line else ""
-        elif u.startswith("ПУНКТ") or u.startswith("СОВЕТ"):
-            if ":" in line:
-                bullet = line.split(":", 1)[1].strip()
-                bullet = re.sub(r'^\d+[\.\)]\s*', '', bullet)
+        if not line:
+            continue
+        clean = _clean_label(line)
+        if not clean:
+            continue
+        u = clean.upper()
+
+        # Заменяем английские метки
+        for en, ru in en_ru_map.items():
+            if u.startswith(en + ":") or u.startswith(en + " :") or u.startswith(en + "."):
+                rest = clean[len(en):].lstrip(": .").strip()
+                clean = f"{ru}: {rest}"
+                u = clean.upper()
+                break
+
+        if ":" in clean:
+            parts = clean.split(":", 1)
+            label = parts[0].upper().strip()
+            value = parts[1].strip()
+        else:
+            label = u
+            value = ""
+
+        if label.startswith("ЗАГОЛОВОК"):
+            result["title"] = value
+        elif label.startswith("ВСТУПЛЕНИЕ"):
+            result["intro"] = value
+        elif label.startswith("ПОДРОБНЕЕ") or label.startswith("РАЗБОР"):
+            result["details"] = value
+        elif label.startswith("БОНУС"):
+            result["bonus"] = value
+        elif (label.startswith("ПУНКТ") or label.startswith("СОВЕТ")
+              or label.startswith("POINT") or label.startswith("TIP")):
+            if value:
+                bullet = re.sub(r'^\d+[\.\)]\s*', '', value)
                 bullet = re.sub(r'^[-•—]\s*', '', bullet)
                 if bullet:
                     result["bullets"].append(bullet)
-        elif u.startswith("ВОПРОС"):
-            result["question"] = line.split(":", 1)[1].strip() if ":" in line else ""
-        elif u.startswith("ХЕШТЕГ"):
-            result["hashtags"] = line.split(":", 1)[1].strip() if ":" in line else ""
+        elif label.startswith("ВОПРОС"):
+            result["question"] = value
+        elif label.startswith("ХЕШТЕГ"):
+            result["hashtags"] = value
 
+    # Извлекаем проценты
     full_text = " ".join([result["intro"], result["details"], " ".join(result["bullets"])])
     percents = re.findall(r'(\d+[\.,]?\d*)\s*%', full_text)
     if len(percents) >= 2:
@@ -107,6 +163,11 @@ def parse_post_structure(text):
             result["numbers"] = [float(p.replace(',', '.')) for p in percents[:3]]
         except:
             result["numbers"] = []
+
+    # Проверка на успешный парсинг
+    if not result["title"] or len(result["bullets"]) < 2:
+        result["_parse_failed"] = True
+
     return result
 
 
@@ -192,10 +253,9 @@ async def generate_post(topic, channel_key, rubric=None, is_series=False):
     series_hint = ""
     if is_series:
         series_hint = """
-=== СЕРИЙНОСТЬ (ОБЯЗАТЕЛЬНО) ===
-Это продолжение серии постов. Начни ВСТУПЛЕНИЕ с фразы:
+=== СЕРИЙНОСТЬ ===
+Это продолжение серии. Начни ВСТУПЛЕНИЕ с фразы:
 «В прошлый вторник мы разбирали похожую тему. Сегодня — продолжение.»
-Затем свяжи текущую тему с предыдущей.
 """
 
     fixed_tags = _get_fixed_hashtags(channel_key, rubric)
@@ -225,28 +285,33 @@ async def generate_post(topic, channel_key, rubric=None, is_series=False):
 {series_hint}
 === ПРАВИЛА ЧЕЛОВЕЧНОСТИ ===
 1. От первого лица: «я», «мне», «по моему опыту».
-2. Личная история или пример (с именем или местом).
+2. Личная история или пример.
 3. Личное мнение: «на мой взгляд», «я считаю».
-4. Эмоции: «меня бесит», «я в шоке», «обидно», «кайфанул».
+4. Эмоции: «меня бесит», «я в шоке», «обидно».
 5. Разговорные обороты: «короче», «по сути», «честно».
 6. Абзацы РАЗНОЙ длины.
-7. Цифра, статистика, факт — обязательно, если уместно.
-8. ЗАПРЕЩЕНЫ шаблоны: «Важно отметить», «В современном мире», «Следует подчеркнуть».
+7. Цифра, статистика, факт — если уместно.
+8. ЗАПРЕЩЕНЫ шаблоны: «Важно отметить», «В современном мире».
 9. Аудитория — обычные люди. Жаргон объясняй.
 10. Финал — живой, с интерактивом.
 
 === ФОРМАТ ОТВЕТА СТРОГО ===
+
+ВАЖНО: пиши БЕЗ ** выделений, без ## заголовков, без решёток, без звёздочек.
+Только текст в формате:
+
 ЗАГОЛОВОК: [до 60 символов, без эмодзи]
 ВСТУПЛЕНИЕ: [2 предложения, 200–250 символов]
 ПОДРОБНЕЕ: [3–4 предложения, 350–450 символов]
 ПУНКТ 1: [до 80 символов, БЕЗ цифры в начале]
 ПУНКТ 2: [до 80 символов, БЕЗ цифры в начале]
 ПУНКТ 3: [до 80 символов, БЕЗ цифры в начале]
-БОНУС: [150–200 символов, личный совет]
+БОНУС: [150–200 символов]
 ВОПРОС: [интерактив, до 90 символов]
 ХЕШТЕГИ: [10–15 через пробел]
 
-ВАЖНО: в пунктах НЕ ставь нумерацию "1.", "2.", "3." — только сам текст.
+ПУНКТЫ — БЕЗ нумерации "1.", "2.", "3.".
+МЕТКИ — БЕЗ звёздочек, решёток, подчёркиваний.
 
 ХЕШТЕГИ:
 Фиксированные: {fixed_tags_str}
@@ -255,12 +320,25 @@ async def generate_post(topic, channel_key, rubric=None, is_series=False):
 
 Длина: 1000–1300 символов."""
 
+    # Первая попытка
     raw = await _smart_call(prompt)
     parsed = parse_post_structure(raw)
 
-    if not parsed["title"] or len(parsed["bullets"]) < 2:
-        return raw, {"title": topic, "bullets": [], "intro": "", "details": "", "bonus": "", "question": "", "hashtags": "", "numbers": []}
+    # Вторая попытка при провале
+    if parsed["_parse_failed"]:
+        print(f"   ⚠️ Парсер не справился, повторная попытка...", flush=True)
+        raw2 = await _smart_call(prompt, temperature=0.5)
+        parsed2 = parse_post_structure(raw2)
+        if not parsed2["_parse_failed"]:
+            parsed = parsed2
+            raw = raw2
 
+    # Финальная проверка
+    if parsed["_parse_failed"]:
+        print(f"   ❌ Не удалось распарсить после двух попыток", flush=True)
+        return None, parsed
+
+    # Хештеги: добираем до 10
     existing_tags = parsed.get("hashtags", "").split()
     if len(existing_tags) < 10:
         need = 10 - len(existing_tags)
@@ -286,24 +364,25 @@ async def generate_meme(topic, channel_key):
 1. Длина: 200-300 символов.
 2. Формат «Ожидание / Реальность» ИЛИ короткая шутка с иронией.
 3. Первая строка — цепляющая, с эмодзи.
-4. В конце — короткий вопрос к читателям.
+4. В конце — короткий вопрос.
 5. Без AI-шаблонов, живо и с юмором.
+6. БЕЗ ** выделений, без ## и решёток.
 
-ФОРМАТ ОТВЕТА СТРОГО:
-ЗАГОЛОВОК: [цепляющий, с эмодзи, до 60 символов]
+ФОРМАТ:
+ЗАГОЛОВОК: [с эмодзи, до 60 символов]
 ВСТУПЛЕНИЕ: [2-3 строки мема, 150-200 символов]
-ПОДРОБНЕЕ: [короткая шутка или завершение, 100-150 символов]
-ПУНКТ 1: [пустая строка]
-ПУНКТ 2: [пустая строка]
-ПУНКТ 3: [пустая строка]
-БОНУС: [пустая строка]
-ВОПРОС: [короткий вопрос, до 70 символов]
+ПОДРОБНЕЕ: [короткая шутка, 100-150 символов]
+ПУНКТ 1:
+ПУНКТ 2:
+ПУНКТ 3:
+БОНУС:
+ВОПРОС: [до 70 символов]
 ХЕШТЕГИ: [#мем #кибербезопасность #CyberGuardianSec #юмор]"""
     try:
         raw = await _smart_call(prompt, temperature=0.9)
         return raw
     except Exception as e:
-        print(f"   ⚠️ Мем: {e}")
+        print(f"   ⚠️ Мем: {e}", flush=True)
         return f"😄 Мем дня\n\nКогда сменил пароль на надёжный, но забыл его.\n\nА вы как храните пароли?\n\n#мем #кибербезопасность"
 
 
@@ -316,19 +395,19 @@ async def generate_vk_version(post_text, channel_key):
 ТРЕБОВАНИЯ:
 1. Длина: 300–500 символов.
 2. ХУК в первой строке.
-3. 3–5 хештегов (не больше).
+3. 3–5 хештегов.
 4. Сохрани главную мысль и эмоцию.
 5. В конце — вопрос к читателям.
 
 КРИТИЧНО:
-- НЕ вставляй ссылки на каналы, Telegram, t.me — я добавлю сам.
+- НЕ вставляй ссылки на Telegram, t.me — я добавлю сам.
 - НЕ вставляй название канала (@...).
 
 Формат — только готовый текст."""
     try:
         return await _smart_call(prompt, temperature=0.7)
     except Exception as e:
-        print(f"   ⚠️ VK-версия: {e}")
+        print(f"   ⚠️ VK-версия: {e}", flush=True)
         return post_text[:500]
 
 
@@ -394,7 +473,7 @@ async def _build_image_prompt(post_text, channel_key):
 {post_text[:800]}
 
 ТРЕБОВАНИЯ:
-1. Конкретный сюжет (что на фото).
+1. Конкретный сюжет.
 2. Стиль (cinematic / minimalist / tech photography).
 3. Композиция с пустым местом сверху и снизу.
 4. НИКАКОГО ТЕКСТА на картинке.
@@ -407,7 +486,7 @@ async def _build_image_prompt(post_text, channel_key):
         result = re.sub(r'^["\']|["\']$', '', result)
         return result[:450]
     except Exception as e:
-        print(f"   ⚠️ Промт: {e}")
+        print(f"   ⚠️ Промт: {e}", flush=True)
         fallback = _remove_emoji(post_text[:100])
         return f"cinematic tech photography about {fallback}, dark moody atmosphere, no text on image"
 
@@ -427,7 +506,7 @@ async def _generate_via_provod(prompt, channel_key):
             async with session.post(PROVOD_IMAGE_URL, headers=headers, json=payload, timeout=120) as resp:
                 if resp.status != 200:
                     err = await resp.text()
-                    print(f"   ⚠️ Provod Image [{resp.status}]: {err[:150]}")
+                    print(f"   ⚠️ Provod Image [{resp.status}]: {err[:150]}", flush=True)
                     return None
                 data = await resp.json()
         items = data.get("data", [])
@@ -440,7 +519,7 @@ async def _generate_via_provod(prompt, channel_key):
             return await _download_image(item["url"])
         return None
     except Exception as e:
-        print(f"   ⚠️ Provod Image: {e}")
+        print(f"   ⚠️ Provod Image: {e}", flush=True)
         return None
 
 
@@ -491,7 +570,7 @@ async def _download_image(url):
                 content = await resp.read()
                 return Image.open(BytesIO(content)).convert("RGB")
     except Exception as e:
-        print(f"   ⚠️ Download: {e}")
+        print(f"   ⚠️ Download: {e}", flush=True)
         return None
 
 
@@ -509,7 +588,7 @@ async def _search_pexels(query, orientation="square"):
                 photo = random.choice(photos[:8])
                 return photo["src"]["large2x"] or photo["src"]["large"]
     except Exception as e:
-        print(f"   ⚠️ Pexels: {e}")
+        print(f"   ⚠️ Pexels: {e}", flush=True)
         return None
 
 
@@ -548,26 +627,25 @@ async def _get_pollinations_bg(topic, channel_key):
 async def _get_background(parsed, channel_key):
     post_text = build_post_text(parsed) if parsed else ""
 
-    print(f"   🎨 Provod Image: строю промт...")
+    print(f"   🎨 Provod Image: строю промт...", flush=True)
     image_prompt = await _build_image_prompt(post_text, channel_key)
-    print(f"   📝 Промт: {image_prompt[:100]}...")
-    print(f"   🎨 Генерирую через {PROVOD_IMAGE_MODEL}...")
+    print(f"   📝 Промт: {image_prompt[:100]}...", flush=True)
     img = await _generate_via_provod(image_prompt, channel_key)
     if img:
         return img, "provod"
-    print(f"   ⚠️ Provod недоступен → Pexels")
+    print(f"   ⚠️ Provod недоступен → Pexels", flush=True)
 
     title = parsed.get("title", "") if parsed else ""
     translation, keywords = await _translate_to_english(title)
     query = keywords if keywords else translation
     if query:
-        print(f"   🔍 Pexels: {query}")
+        print(f"   🔍 Pexels: {query}", flush=True)
         url = await _search_pexels(query)
         if url:
             img = await _download_image(url)
             if img: return img, "pexels"
 
-    print(f"   🎨 Pollinations fallback")
+    print(f"   🎨 Pollinations fallback", flush=True)
     img = await _get_pollinations_bg(translation or title, channel_key)
     if img: return img, "pollinations"
 
@@ -626,7 +704,7 @@ def _draw_chart_pil(draw, W, H, numbers, accent):
 
 
 # ============================================================
-# 6 ШАБЛОНОВ КАРТОЧЕК (текст не ниже H-160)
+# ШАБЛОНЫ КАРТОЧЕК
 # ============================================================
 
 def _card_classic(bg, parsed, channel_key, palette, brand, accent):
@@ -671,6 +749,8 @@ def _card_classic(bg, parsed, channel_key, palette, brand, accent):
         except: nw, nh = 12, 20
         draw.text((cx - nw//2, cy - nh//2 - 5), num, font=font_n, fill=(0, 0, 0))
         for line in _wrap_text(bc, font_b, W - 2*pad - 80, draw)[:2]:
+            if y + 48 > H - TEXT_BOTTOM_LIMIT:
+                break
             draw.text((pad + 80, y), line, font=font_b, fill=(0,0,0), stroke_width=3, stroke_fill=(0,0,0))
             draw.text((pad + 80, y), line, font=font_b, fill=(240, 240, 240))
             y += 48
@@ -712,7 +792,6 @@ def _card_gradient(bg, parsed, channel_key, palette, brand, accent):
     bullets = parsed.get("bullets", [])[:3]
     font_b = _find_font(28)
     y += 30
-    # Ограничение: не ниже H - TEXT_BOTTOM_LIMIT
     for b in bullets:
         if y + 44 > H - TEXT_BOTTOM_LIMIT:
             break
@@ -762,7 +841,6 @@ def _card_accent(bg, parsed, channel_key, palette, brand, accent):
         y += size + 16
     bullets = parsed.get("bullets", [])[:3]
     font_b = _find_font(28)
-    # Пункты с H-340, 3 × 42 = 126 → H-214. Плашка с H-130. Отступ 84px.
     y = H - 340
     for b in bullets[:3]:
         if y + 42 > H - TEXT_BOTTOM_LIMIT:
@@ -803,7 +881,6 @@ def _card_bottom_up(bg, parsed, channel_key, palette, brand, accent):
             y += 46
         y += 14
     emoji = _extract_emoji(parsed.get("title", ""))
-    # Поднимаем заголовок ниже: H-540 вместо H-430, при эмодзи — H-640
     y = H - 640
     if emoji:
         font_e = _find_font(80)
@@ -873,7 +950,6 @@ def _card_magazine(bg, parsed, channel_key, palette, brand, accent):
     bullets = parsed.get("bullets", [])[:3]
     font_b = _find_font(26, bold=True)
     if bullets:
-        # Пункты с H-240 (было H-180). 2 строки × 36 = 72 → H-168. Плашка с H-130. Отступ 38px.
         y = H - 240
         text = " • ".join([_remove_emoji(b)[:30] for b in bullets if b])
         for line in _wrap_text(text, font_b, W - 2 * pad, draw)[:2]:
@@ -946,7 +1022,7 @@ CARD_FUNCS = {
 async def generate_image(parsed, channel_key="cyber", rubric=None):
     try:
         bg, source = await _get_background(parsed, channel_key)
-        print(f"   📷 Фон: {source}")
+        print(f"   📷 Фон: {source}", flush=True)
 
         palette = random.choice(PALETTES.get(channel_key, PALETTES["cyber"]))
         if rubric:
@@ -963,23 +1039,23 @@ async def generate_image(parsed, channel_key="cyber", rubric=None):
         else:
             template = random.choice(CARD_TEMPLATES)
 
-        print(f"   🎨 Шаблон: {template}, accent: {accent}")
+        print(f"   🎨 Шаблон: {template}", flush=True)
 
         card = CARD_FUNCS[template](bg, parsed, channel_key, palette, brand, accent)
 
         numbers = parsed.get("numbers", []) if parsed else []
         if numbers and len(numbers) >= 2 and template not in ["meme"]:
-            print(f"   📊 Инфографика: {numbers}")
+            print(f"   📊 Инфографика: {numbers}", flush=True)
             draw = ImageDraw.Draw(card)
             _draw_chart_pil(draw, 1080, 1080, numbers, accent)
 
         filename = f"{channel_key}_{template}_{abs(hash(parsed.get('title','') + str(random.randint(1,99999)))) % 100000}.png"
         filepath = os.path.join(IMAGES_DIR, filename)
         card.save(filepath, "PNG")
-        print(f"   ✅ Готово: {filename}")
+        print(f"   ✅ Готово: {filename}", flush=True)
         return filepath
     except Exception as e:
-        print(f"   ⚠️ Визуал: {e}")
+        print(f"   ⚠️ Визуал: {e}", flush=True)
         import traceback
         traceback.print_exc()
         return ""
@@ -1032,5 +1108,5 @@ async def generate_article_cover(title, channel_key="cyber"):
         cover.save(filepath, "PNG")
         return filepath
     except Exception as e:
-        print(f"   ⚠️ Обложка: {e}")
+        print(f"   ⚠️ Обложка: {e}", flush=True)
         return ""
