@@ -30,6 +30,9 @@ USED_TOPICS_FILE = os.path.join(DATA_DIR, "used_topics.json")
 SAFE_ZONE = 110
 TEXT_BOTTOM_LIMIT = 160
 
+# Вероятность, что пост закончится вопросом (иначе — мысль/факт/обрыв)
+QUESTION_CHANCE = 0.25
+
 
 def load_used_topics():
     if not os.path.exists(USED_TOPICS_FILE):
@@ -80,6 +83,20 @@ def _clean_label(line: str) -> str:
     return line.strip()
 
 
+def _split_bullets_from_value(value: str):
+    """Разбивает строку на пункты по разделителям — / - / • / ;"""
+    if not value:
+        return []
+    parts = re.split(r'\s*[—–•]\s+|\s+-\s+', value)
+    result = []
+    for p in parts:
+        p = p.strip()
+        p = re.sub(r'^\d+[\.\)]\s*', '', p)
+        if p and len(p) > 3:
+            result.append(p)
+    return result
+
+
 def parse_post_structure(text):
     result = {"title": "", "intro": "", "details": "", "bonus": "",
               "bullets": [], "question": "", "hashtags": "", "numbers": [],
@@ -93,18 +110,10 @@ def parse_post_structure(text):
         "DETAIL": "ПОДРОБНЕЕ",
         "BREAKDOWN": "РАЗБОР",
         "BONUS": "БОНУС",
-        "POINT 1": "ПУНКТ 1",
-        "POINT 2": "ПУНКТ 2",
-        "POINT 3": "ПУНКТ 3",
-        "POINT1": "ПУНКТ 1",
-        "POINT2": "ПУНКТ 2",
-        "POINT3": "ПУНКТ 3",
-        "TIP 1": "СОВЕТ 1",
-        "TIP 2": "СОВЕТ 2",
-        "TIP 3": "СОВЕТ 3",
-        "TIP1": "СОВЕТ 1",
-        "TIP2": "СОВЕТ 2",
-        "TIP3": "СОВЕТ 3",
+        "POINTS": "ПУНКТЫ",
+        "POINT": "ПУНКТЫ",
+        "FINAL": "ФИНАЛ",
+        "ENDING": "ФИНАЛ",
         "QUESTION": "ВОПРОС",
         "HASHTAGS": "ХЕШТЕГИ",
         "TAGS": "ХЕШТЕГИ",
@@ -127,6 +136,14 @@ def parse_post_structure(text):
                 u = clean.upper()
                 break
 
+        # Обработка строки-пункта, начинающейся с — / - / •
+        if re.match(r'^[—–•\-]\s+', clean):
+            bullet_text = re.sub(r'^[—–•\-]\s+', '', clean).strip()
+            bullet_text = re.sub(r'^\d+[\.\)]\s*', '', bullet_text)
+            if bullet_text:
+                result["bullets"].append(bullet_text)
+            continue
+
         if ":" in clean:
             parts = clean.split(":", 1)
             label = parts[0].upper().strip()
@@ -143,14 +160,18 @@ def parse_post_structure(text):
             result["details"] = value
         elif label.startswith("БОНУС"):
             result["bonus"] = value
+        elif label.startswith("ПУНКТЫ"):
+            # Новый формат: «ПУНКТЫ: — а — б — в»
+            for b in _split_bullets_from_value(value):
+                result["bullets"].append(b)
         elif (label.startswith("ПУНКТ") or label.startswith("СОВЕТ")
               or label.startswith("POINT") or label.startswith("TIP")):
             if value:
                 bullet = re.sub(r'^\d+[\.\)]\s*', '', value)
-                bullet = re.sub(r'^[-•—]\s*', '', bullet)
+                bullet = re.sub(r'^[-•—–]\s*', '', bullet)
                 if bullet:
                     result["bullets"].append(bullet)
-        elif label.startswith("ВОПРОС"):
+        elif label.startswith("ФИНАЛ") or label.startswith("ВОПРОС"):
             result["question"] = value
         elif label.startswith("ХЕШТЕГ"):
             result["hashtags"] = value
@@ -164,8 +185,8 @@ def parse_post_structure(text):
         except:
             result["numbers"] = []
 
-    # Проверка на успешный парсинг
-    if not result["title"] or len(result["bullets"]) < 2:
+    # Проверка на успешный парсинг — теперь достаточно 1 пункта
+    if not result["title"] or len(result["bullets"]) < 1:
         result["_parse_failed"] = True
 
     return result
@@ -176,7 +197,9 @@ def build_post_text(p):
     if p["title"]: parts.append(p["title"])
     if p["intro"]: parts.append(p["intro"])
     if p["details"]: parts.append(p["details"])
-    if p["bullets"]: parts.append("\n".join([f"{i}. {b}" for i, b in enumerate(p["bullets"][:5], 1)]))
+    if p["bullets"]:
+        # Нумеруем для читателя, даже если модель отдала без номеров
+        parts.append("\n".join([f"{i}. {b}" for i, b in enumerate(p["bullets"][:5], 1)]))
     if p["bonus"]: parts.append(f"💡 {p['bonus']}")
     if p["question"]: parts.append(p["question"])
     if p["hashtags"]: parts.append(p["hashtags"])
@@ -227,15 +250,15 @@ def _get_fixed_hashtags(channel_key, rubric):
     return tags
 
 
-def _get_topic_pool(channel_key, count=35):
+def _get_topic_pool(channel_key, count=10):
     pool = TOPIC_HASHTAG_POOL.get(channel_key, [])
     return random.sample(pool, min(count, len(pool))) if pool else []
 
 
 POST_TEMPLATE_PROMPTS = {
-    "story": "СТРУКТУРА: История. Начни с конкретного момента из жизни. Разверни подробно, с эмоциями. В конце — вывод и 3 совета.",
+    "story": "СТРУКТУРА: История. Начни с конкретного момента из жизни. Разверни подробно, с деталями. В конце — вывод, без морали.",
     "breakdown": "СТРУКТУРА: Разбор. Начни с факта/новости. Разбери: ЧТО случилось / ПОЧЕМУ важно / ЧТО делать.",
-    "checklist": "СТРУКТУРА: Чек-лист. Начни с проблемы. 5 коротких пунктов. В конце — 1 главный совет от себя.",
+    "checklist": "СТРУКТУРА: Чек-лист. Начни с проблемы. 3–5 коротких пунктов (число выбери сам). В конце — мысль от себя.",
     "myth": "СТРУКТУРА: Миф vs Реальность. Начни с мифа. Развенчай. Дай доказательство. В конце — что делать вместо этого.",
 }
 
@@ -248,7 +271,16 @@ async def generate_post(topic, channel_key, rubric=None, is_series=False):
     template = random.choice(POST_TEMPLATES)
     template_hint = POST_TEMPLATE_PROMPTS.get(template, "")
     hook = random.choice(POST_HOOKS)
-    closing = random.choice(POST_CLOSINGS)
+
+    # Финальный вопрос — редко. В 75% случаев просим мысль/факт/обрыв.
+    use_question_final = random.random() < QUESTION_CHANCE
+    if use_question_final:
+        closing = random.choice(POST_CLOSINGS) if POST_CLOSINGS else "Короткий вопрос по теме"
+        closing_hint = f"ФИНАЛ: закончи коротким вопросом. Приём: {closing}"
+    else:
+        closing_hint = ("ФИНАЛ: закончи мыслью, фактом или обрывом. "
+                        "НЕ вопрос. Например: наблюдение, вывод, «и вот что я понял», "
+                        "недосказанность. Без морали и без призыва.")
 
     series_hint = ""
     if is_series:
@@ -259,7 +291,7 @@ async def generate_post(topic, channel_key, rubric=None, is_series=False):
 """
 
     fixed_tags = _get_fixed_hashtags(channel_key, rubric)
-    pool_sample = _get_topic_pool(channel_key, count=35)
+    pool_sample = _get_topic_pool(channel_key, count=10)
     fixed_tags_str = " ".join(fixed_tags) if fixed_tags else ""
     pool_str = ", ".join(pool_sample) if pool_sample else ""
 
@@ -280,20 +312,21 @@ async def generate_post(topic, channel_key, rubric=None, is_series=False):
 === ХУК ОТКРЫТИЯ ===
 Используй приём: {hook}
 
-=== ИНТЕРАКТИВ В КОНЦЕ ===
-В конце используй: {closing}
 {series_hint}
-=== ПРАВИЛА ЧЕЛОВЕЧНОСТИ ===
-1. От первого лица: «я», «мне», «по моему опыту».
-2. Личная история или пример.
-3. Личное мнение: «на мой взгляд», «я считаю».
-4. Эмоции: «меня бесит», «я в шоке», «обидно».
-5. Разговорные обороты: «короче», «по сути», «честно».
-6. Абзацы РАЗНОЙ длины.
-7. Цифра, статистика, факт — если уместно.
-8. ЗАПРЕЩЕНЫ шаблоны: «Важно отметить», «В современном мире».
-9. Аудитория — обычные люди. Жаргон объясняй.
-10. Финал — живой, с интерактивом.
+=== КАК ПИСАТЬ ЖИВО ===
+1. Конкретика вместо обобщений: не «многие теряют деньги», а «знакомая потеряла 150 тысяч за 3 минуты».
+2. Одна деталь, которую нельзя выдумать: время суток, погода, раздражение, сомнение.
+3. Одна шероховатость: «не помню точно», «звучит глупо, но», «до сих пор не понимаю».
+4. Если рассказываешь историю — покажи провал, а не только успех. Не «я настроил и всё заработало», а «сначала не работало, потом понял в чём фишка».
+5. Абзацы РАЗНОЙ длины. Где-то одно предложение, где-то три.
+
+=== ЗАПРЕЩЕНО (проверь перед выдачей) ===
+- «на мой взгляд», «по моему опыту», «честно говоря», «короче», «суть в том», «меня бесит», «обидно», «в современном мире», «важно отметить», «давайте разберёмся»
+- точные проценты без источника — заменяй на «примерно», «по ощущениям», «не считал точно»
+- ровно 3 пункта в списке — делай 2, 4 или 5 (число выбирай сам)
+- «💡 Мой главный совет» / «Мой личный лайфхак»
+- заканчивать вопросом «Проверь себя:» / «А ты как думаешь?» — только если ниже указано ФИНАЛ-ВОПРОС
+- истории про «знакомого/друга/клиента», который идеально облажался — не выдумывай шаблонную байку. Либо реальный случай из новостей, либо личное наблюдение.
 
 === ФОРМАТ ОТВЕТА СТРОГО ===
 
@@ -303,22 +336,20 @@ async def generate_post(topic, channel_key, rubric=None, is_series=False):
 ЗАГОЛОВОК: [до 60 символов, без эмодзи]
 ВСТУПЛЕНИЕ: [2 предложения, 200–250 символов]
 ПОДРОБНЕЕ: [3–4 предложения, 350–450 символов]
-ПУНКТ 1: [до 80 символов, БЕЗ цифры в начале]
-ПУНКТ 2: [до 80 символов, БЕЗ цифры в начале]
-ПУНКТ 3: [до 80 символов, БЕЗ цифры в начале]
-БОНУС: [150–200 символов]
-ВОПРОС: [интерактив, до 90 символов]
-ХЕШТЕГИ: [10–15 через пробел]
+ПУНКТЫ: [2–5 пунктов через «— ». Число пунктов выбери сам, НЕ всегда 3]
+БОНУС: [одна мысль от себя, 150–200 символов. Без 💡 и без «мой совет»]
+{closing_hint}
+ХЕШТЕГИ: [4–5 через пробел]
 
-ПУНКТЫ — БЕЗ нумерации "1.", "2.", "3.".
+ПУНКТЫ — БЕЗ нумерации "1.", "2.", "3.". Разделяй через «— ».
 МЕТКИ — БЕЗ звёздочек, решёток, подчёркиваний.
 
 ХЕШТЕГИ:
 Фиксированные: {fixed_tags_str}
-Тематические (выбери 7–12): {pool_str}
-Итого 10–15. Без повторов.
+Тематические (выбери 1–2): {pool_str}
+Итого 4–5. Без спама.
 
-Длина: 1000–1300 символов."""
+Длина: 900–1200 символов."""
 
     # Первая попытка
     raw = await _smart_call(prompt)
@@ -338,19 +369,20 @@ async def generate_post(topic, channel_key, rubric=None, is_series=False):
         print(f"   ❌ Не удалось распарсить после двух попыток", flush=True)
         return None, parsed
 
-    # Хештеги: добираем до 10
+    # Хештеги: 4–5, без спама
     existing_tags = parsed.get("hashtags", "").split()
-    if len(existing_tags) < 10:
-        need = 10 - len(existing_tags)
+    all_tags = existing_tags + fixed_tags
+    seen, unique = set(), []
+    for t in all_tags:
+        if t not in seen:
+            seen.add(t); unique.append(t)
+    # если меньше 4 — добираем из пула
+    if len(unique) < 4:
         pool = TOPIC_HASHTAG_POOL.get(channel_key, [])
-        candidates = [t for t in pool if t not in existing_tags]
+        candidates = [t for t in pool if t not in unique]
         random.shuffle(candidates)
-        all_tags = existing_tags + fixed_tags + candidates[:need]
-        seen, unique = set(), []
-        for t in all_tags:
-            if t not in seen:
-                seen.add(t); unique.append(t)
-        parsed["hashtags"] = " ".join(unique[:15])
+        unique.extend(candidates[:4 - len(unique)])
+    parsed["hashtags"] = " ".join(unique[:5])
 
     return build_post_text(parsed), parsed
 
@@ -364,7 +396,7 @@ async def generate_meme(topic, channel_key):
 1. Длина: 200-300 символов.
 2. Формат «Ожидание / Реальность» ИЛИ короткая шутка с иронией.
 3. Первая строка — цепляющая, с эмодзи.
-4. В конце — короткий вопрос.
+4. В конце — короткая мысль или вопрос.
 5. Без AI-шаблонов, живо и с юмором.
 6. БЕЗ ** выделений, без ## и решёток.
 
@@ -372,18 +404,16 @@ async def generate_meme(topic, channel_key):
 ЗАГОЛОВОК: [с эмодзи, до 60 символов]
 ВСТУПЛЕНИЕ: [2-3 строки мема, 150-200 символов]
 ПОДРОБНЕЕ: [короткая шутка, 100-150 символов]
-ПУНКТ 1:
-ПУНКТ 2:
-ПУНКТ 3:
-БОНУС:
-ВОПРОС: [до 70 символов]
+ПУНКТЫ: [1–2 пункта через «— »]
+БОНУС: [мысль]
+ФИНАЛ: [короткая мысль или вопрос]
 ХЕШТЕГИ: [#мем #кибербезопасность #CyberGuardianSec #юмор]"""
     try:
         raw = await _smart_call(prompt, temperature=0.9)
         return raw
     except Exception as e:
         print(f"   ⚠️ Мем: {e}", flush=True)
-        return f"😄 Мем дня\n\nКогда сменил пароль на надёжный, но забыл его.\n\nА вы как храните пароли?\n\n#мем #кибербезопасность"
+        return f"😄 Мем дня\n\nКогда сменил пароль на надёжный, но забыл его.\n\n#мем #кибербезопасность"
 
 
 async def generate_vk_version(post_text, channel_key):
@@ -397,7 +427,7 @@ async def generate_vk_version(post_text, channel_key):
 2. ХУК в первой строке.
 3. 3–5 хештегов.
 4. Сохрани главную мысль и эмоцию.
-5. В конце — вопрос к читателям.
+5. Финал — мысль или короткий вопрос.
 
 КРИТИЧНО:
 - НЕ вставляй ссылки на Telegram, t.me — я добавлю сам.
