@@ -1,3 +1,6 @@
+import sys
+sys.stdout.reconfigure(line_buffering=True)
+
 import asyncio
 import logging
 import os
@@ -132,8 +135,7 @@ def _format_vk_post(vk_text, channel_key, tg_message_id):
     for t in tags_all:
         tl = t.lower()
         if tl not in seen:
-            seen.add(tl)
-            unique.append(t)
+            seen.add(tl); unique.append(t)
 
     body = "\n".join(body_lines).strip()
     tg_link_base = TG_LINKS.get(channel_key, "")
@@ -144,11 +146,9 @@ def _format_vk_post(vk_text, channel_key, tg_message_id):
 
 
 async def _send_card_to_admin(image_path, channel_key):
-    if not image_path or not os.path.exists(image_path):
-        return
+    if not image_path or not os.path.exists(image_path): return
     admin_id = get_admin_chat_id()
-    if not admin_id:
-        return
+    if not admin_id: return
     try:
         photo = FSInputFile(image_path)
         channel_name = "CyberGuardianSec" if channel_key == "cyber" else "AI Navigator"
@@ -157,24 +157,22 @@ async def _send_card_to_admin(image_path, channel_key):
             caption=f"🖼 <b>Карточка для VK</b> ({channel_name})\n\nСкачай и вставь в VK-пост вручную."
         )
     except Exception as e:
-        print(f"⚠️ [Admin] {e}")
+        print(f"⚠️ [Admin] {e}", flush=True)
 
 
 async def _publish_vk_now(channel_key, post_text, image_path, tg_message_id):
-    print(f"\n⏳ [VK] Публикация ({channel_key})...")
+    print(f"\n⏳ [VK] Публикация ({channel_key})...", flush=True)
     try:
         vk_text = await generate_vk_version(post_text, channel_key)
         vk_text = _format_vk_post(vk_text, channel_key, tg_message_id)
-
         result = await publish_to_vk(channel_key, vk_text, None)
         if result:
-            print(f"✅ [VK] Опубликовано ({channel_key})")
+            print(f"✅ [VK] Опубликовано ({channel_key})", flush=True)
         else:
-            print(f"⚠️ [VK] publish_to_vk вернул False")
-
+            print(f"⚠️ [VK] publish_to_vk вернул False", flush=True)
         await _send_card_to_admin(image_path, channel_key)
     except Exception as e:
-        print(f"❌ [VK] Ошибка: {e}")
+        print(f"❌ [VK] Ошибка: {e}", flush=True)
 
 
 @dp.message(Command("start"))
@@ -197,14 +195,13 @@ async def bottom_menu_handler(message: types.Message, state: FSMContext):
     await message.answer("🏠 Главное меню:", reply_markup=main_menu())
 
 
-# === МЕМ ДНЯ ===
 @dp.callback_query(F.data == "menu_meme")
 async def menu_meme(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(MemeFlow.entering_topic)
     try:
         await callback.message.edit_text(
             "😄 <b>Мем дня</b>\n\n"
-            "✏️ Напиши тему (или отправь «random» — выберу сам).\n\n"
+            "✏️ Напиши тему (или отправь «random»).\n\n"
             "<i>Пример: пароли, VPN, фишинг</i>"
         )
     except:
@@ -226,45 +223,34 @@ async def handle_meme_topic(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data.startswith("memech_"), MemeFlow.choosing_channel)
 async def handle_meme_channel(callback: types.CallbackQuery, state: FSMContext):
     channel_key = callback.data.replace("memech_", "")
-    if channel_key not in CHANNELS:
-        return
+    if channel_key not in CHANNELS: return
     data = await state.get_data()
     topic = data.get("meme_topic", "пароли")
     emoji = "🔐" if channel_key == "cyber" else "🤖"
     await callback.answer()
-    try:
-        await callback.message.edit_text(f"{emoji} Генерирую мем... ⏳")
-    except:
-        pass
+    try: await callback.message.edit_text(f"{emoji} Генерирую мем... ⏳")
+    except: pass
     try:
         post_text = await generate_meme(topic, channel_key)
-        parsed = {"title": "Мем дня", "intro": post_text[:200], "details": "", "bullets": [], "bonus": "", "question": "", "hashtags": "#мем", "numbers": []}
+        parsed = {"title": "😄 Мем дня", "intro": post_text, "details": "", "bullets": [], "bonus": "", "question": "", "hashtags": "#мем", "numbers": [], "_parse_failed": False}
         rubric = {"key": "meme", "name": "😄 Мем дня", "format": "meme"}
         image_path = await generate_image(parsed, channel_key, rubric)
+        await state.update_data(post_text=post_text, image_url=image_path, channel_key=channel_key)
         if image_path and os.path.exists(image_path):
-            photo = FSInputFile(image_path)
-            await callback.message.answer_photo(photo, caption=post_text, reply_markup=approve_inline())
-            await state.update_data(post_text=post_text, image_url=image_path, channel_key=channel_key)
-            await state.set_state(PostFlow.approving)
+            await callback.message.answer_photo(FSInputFile(image_path), caption=post_text, reply_markup=approve_inline())
         else:
             await callback.message.answer(post_text, reply_markup=approve_inline())
-            await state.update_data(post_text=post_text, image_url="", channel_key=channel_key)
-            await state.set_state(PostFlow.approving)
+        await state.set_state(PostFlow.approving)
     except Exception as e:
         await callback.message.answer(f"❌ {e}")
         await state.clear()
 
 
-# === ОБЛОЖКА ===
 @dp.callback_query(F.data == "menu_cover")
 async def menu_cover(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(CoverFlow.entering_title)
     try:
-        await callback.message.edit_text(
-            "🖼 <b>Обложка для статьи</b>\n\n"
-            "✏️ Напиши заголовок статьи.\n"
-            "Найду фото, добавлю заголовок и брендинг."
-        )
+        await callback.message.edit_text("🖼 <b>Обложка для статьи</b>\n\n✏️ Напиши заголовок статьи.")
     except:
         await callback.message.delete()
         await callback.message.answer("✏️ Напиши заголовок статьи:")
@@ -281,8 +267,7 @@ async def handle_cover_title(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data.startswith("coverch_"), CoverFlow.choosing_channel)
 async def handle_cover_channel(callback: types.CallbackQuery, state: FSMContext):
     channel_key = callback.data.replace("coverch_", "")
-    if channel_key not in CHANNELS:
-        return
+    if channel_key not in CHANNELS: return
     data = await state.get_data()
     title = data.get("cover_title", "")
     emoji = "🔐" if channel_key == "cyber" else "🤖"
@@ -292,8 +277,7 @@ async def handle_cover_channel(callback: types.CallbackQuery, state: FSMContext)
     try:
         path = await generate_article_cover(title, channel_key)
         if path and os.path.exists(path):
-            photo = FSInputFile(path)
-            await callback.message.answer_photo(photo, caption=f"🖼 <b>Обложка готова</b>\n\nКанал: {CHANNELS[channel_key]['name']}\nЗаголовок: {title}")
+            await callback.message.answer_photo(FSInputFile(path), caption=f"🖼 <b>Обложка готова</b>\n\n{title}")
         else:
             await callback.message.answer("❌ Не удалось создать обложку.")
     except Exception as e:
@@ -301,7 +285,6 @@ async def handle_cover_channel(callback: types.CallbackQuery, state: FSMContext)
     await state.clear()
 
 
-# === ДАЙДЖЕСТ / АНАЛИТИКА / API ===
 @dp.message(Command("digest"))
 async def cmd_digest(message: types.Message):
     await message.answer("🔍 Ищу каналы...")
@@ -364,7 +347,6 @@ async def cancel_preview(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# === ИДЕИ ===
 @dp.callback_query(F.data == "menu_ideas")
 async def menu_ideas(callback: types.CallbackQuery):
     try: await callback.message.edit_text("Выбери канал:", reply_markup=channels_inline("idea"))
@@ -425,6 +407,10 @@ async def use_idea(callback: types.CallbackQuery, state: FSMContext):
     chat_id = callback.message.chat.id
     try:
         post_text, parsed = await generate_post(topic, channel_key)
+        if post_text is None or parsed is None or parsed.get("_parse_failed"):
+            await bot.send_message(chat_id, "⚠️ Не смог распарсить пост. Попробуй другую тему или перегенерируй.", reply_markup=main_menu())
+            await state.clear()
+            return
         image_path = await generate_image(parsed, channel_key)
         await state.update_data(topic=topic, post_text=post_text, image_url=image_path, channel_key=channel_key)
         await state.set_state(PostFlow.approving)
@@ -436,7 +422,6 @@ async def use_idea(callback: types.CallbackQuery, state: FSMContext):
         await state.clear()
 
 
-# === СОЗДАТЬ ПОСТ ===
 @dp.callback_query(F.data == "menu_create")
 async def menu_create(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(PostFlow.entering_topic)
@@ -473,6 +458,10 @@ async def handle_topic(message: types.Message, state: FSMContext):
     await message.answer(f"⏳ Генерирую для {emoji} <b>{profile['name']}</b>...")
     try:
         post_text, parsed = await generate_post(topic, channel_key)
+        if post_text is None or parsed is None or parsed.get("_parse_failed"):
+            await message.answer("⚠️ Не смог распарсить пост. Попробуй другую тему.", reply_markup=main_menu())
+            await state.clear()
+            return
         image_path = await generate_image(parsed, channel_key)
         await state.update_data(topic=topic, post_text=post_text, image_url=image_path)
         await state.set_state(PostFlow.approving)
@@ -482,7 +471,6 @@ async def handle_topic(message: types.Message, state: FSMContext):
         await state.clear()
 
 
-# === ПУБЛИКАЦИЯ ===
 @dp.callback_query(F.data == "approve_publish", PostFlow.approving)
 async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -493,18 +481,14 @@ async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
     try:
         tg_message = None
         if image_path and os.path.exists(image_path) and len(post_text) <= 1024:
-            photo = FSInputFile(image_path)
-            tg_message = await bot.send_photo(profile["telegram_channel"], photo, caption=post_text)
+            tg_message = await bot.send_photo(profile["telegram_channel"], FSInputFile(image_path), caption=post_text)
         else:
             tg_message = await bot.send_message(profile["telegram_channel"], post_text)
         increment_post_count()
         try: await callback.message.delete()
         except: pass
         await _publish_vk_now(channel_key, post_text, image_path, tg_message.message_id)
-        await callback.message.answer(
-            f"✅ Опубликовано в TG + VK ({profile['name']})\n🖼 Карточка для VK — в личке",
-            reply_markup=main_menu()
-        )
+        await callback.message.answer(f"✅ Опубликовано в TG + VK ({profile['name']})\n🖼 Карточка для VK — в личке", reply_markup=main_menu())
     except Exception as e:
         await callback.message.answer(f"❌ {e}", reply_markup=main_menu())
     await state.clear()
@@ -520,8 +504,7 @@ async def approve_publish_tg(callback: types.CallbackQuery, state: FSMContext):
     profile = CHANNELS[channel_key]
     try:
         if image_path and os.path.exists(image_path) and len(post_text) <= 1024:
-            photo = FSInputFile(image_path)
-            await bot.send_photo(profile["telegram_channel"], photo, caption=post_text)
+            await bot.send_photo(profile["telegram_channel"], FSInputFile(image_path), caption=post_text)
         else:
             await bot.send_message(profile["telegram_channel"], post_text)
         increment_post_count()
@@ -548,6 +531,10 @@ async def approve_regen(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     try:
         post_text, parsed = await generate_post(topic, channel_key)
+        if post_text is None or parsed is None or parsed.get("_parse_failed"):
+            await bot.send_message(chat_id, "⚠️ Не смог распарсить. Попробуй другую тему.", reply_markup=main_menu())
+            await state.clear()
+            return
         image_path = await generate_image(parsed, channel_key)
         await state.update_data(post_text=post_text, image_url=image_path)
         try: await callback.message.delete()
