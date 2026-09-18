@@ -19,7 +19,7 @@ import threading
 from config import BOT_TOKEN, CHANNELS, TG_LINKS
 from generator import (
     generate_post, generate_image, generate_ideas,
-    generate_article_cover, generate_vk_version,
+    generate_article_cover, generate_vk_version, generate_meme,
 )
 from scheduler import start_scheduler
 from comment_assistant import send_daily_digest, save_admin_chat_id, get_admin_chat_id
@@ -45,6 +45,11 @@ class CoverFlow(StatesGroup):
     choosing_channel = State()
 
 
+class MemeFlow(StatesGroup):
+    entering_topic = State()
+    choosing_channel = State()
+
+
 def bottom_menu():
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="🏠 Главное меню")]],
@@ -57,9 +62,10 @@ def main_menu():
         [InlineKeyboardButton(text="📝 Создать пост", callback_data="menu_create")],
         [InlineKeyboardButton(text="💡 Идеи тем", callback_data="menu_ideas"),
          InlineKeyboardButton(text="📊 Аналитика", callback_data="menu_analytics")],
+        [InlineKeyboardButton(text="😄 Мем дня", callback_data="menu_meme"),
+         InlineKeyboardButton(text="🖼 Обложка для статьи", callback_data="menu_cover")],
         [InlineKeyboardButton(text="🔔 Дайджест", callback_data="menu_digest"),
          InlineKeyboardButton(text="🔍 Статус API", callback_data="menu_api")],
-        [InlineKeyboardButton(text="🖼 Обложка для статьи", callback_data="menu_cover")],
         [InlineKeyboardButton(text="📢 Опубликовать вручную", callback_data="menu_manual")],
     ])
 
@@ -102,9 +108,7 @@ async def _send_preview(chat_id, post_text, image_path, channel_key, reply_marku
 
 
 def _format_vk_post(vk_text, channel_key, tg_message_id):
-    """Формат VK: тело → ссылка → хештеги одной строкой."""
     lines = vk_text.rstrip().split("\n")
-
     body_lines = []
     existing_tags = []
     for line in lines:
@@ -132,7 +136,6 @@ def _format_vk_post(vk_text, channel_key, tg_message_id):
             unique.append(t)
 
     body = "\n".join(body_lines).strip()
-
     tg_link_base = TG_LINKS.get(channel_key, "")
     if tg_link_base and tg_message_id:
         body = body.rstrip() + f"\n\n👉 Продолжение: {tg_link_base}/{tg_message_id}"
@@ -141,46 +144,28 @@ def _format_vk_post(vk_text, channel_key, tg_message_id):
 
 
 async def _send_card_to_admin(image_path, channel_key):
-    """Отправляет карточку админу в личку для вставки в VK."""
     if not image_path or not os.path.exists(image_path):
-        print(f"⚠️ [Admin] Карточки нет")
         return
     admin_id = get_admin_chat_id()
     if not admin_id:
-        print(f"⚠️ [Admin] admin_chat_id не найден")
         return
     try:
         photo = FSInputFile(image_path)
         channel_name = "CyberGuardianSec" if channel_key == "cyber" else "AI Navigator"
         await bot.send_photo(
-            admin_id,
-            photo,
-            caption=(
-                f"🖼 <b>Карточка для VK</b> ({channel_name})\n\n"
-                f"Скачай и вставь в VK-пост вручную.\n"
-                f"<i>VK API не даёт загружать фото с токеном сообщества.</i>"
-            )
+            admin_id, photo,
+            caption=f"🖼 <b>Карточка для VK</b> ({channel_name})\n\nСкачай и вставь в VK-пост вручную."
         )
-        print(f"✅ [Admin] Карточка отправлена ({channel_key})")
     except Exception as e:
-        print(f"⚠️ [Admin] Ошибка: {e}")
+        print(f"⚠️ [Admin] {e}")
 
 
 async def _publish_vk_now(channel_key, post_text, image_path, tg_message_id):
-    """VK-пост (только текст) + карточка админу."""
-    print(f"\n{'='*50}")
-    print(f"⏳ [VK] Публикация ({channel_key})")
-    print(f"{'='*50}")
+    print(f"\n⏳ [VK] Публикация ({channel_key})...")
     try:
-        print(f"📝 [VK] Генерирую VK-версию...")
         vk_text = await generate_vk_version(post_text, channel_key)
-        print(f"✅ [VK] VK-версия: {len(vk_text)} символов")
-
         vk_text = _format_vk_post(vk_text, channel_key, tg_message_id)
-        print(f"📋 [VK] Финальный текст ({len(vk_text)} символов):")
-        print(vk_text)
 
-        print(f"📤 [VK] Отправляю в VK (без фото)...")
         result = await publish_to_vk(channel_key, vk_text, None)
         if result:
             print(f"✅ [VK] Опубликовано ({channel_key})")
@@ -188,20 +173,15 @@ async def _publish_vk_now(channel_key, post_text, image_path, tg_message_id):
             print(f"⚠️ [VK] publish_to_vk вернул False")
 
         await _send_card_to_admin(image_path, channel_key)
-
     except Exception as e:
         print(f"❌ [VK] Ошибка: {e}")
-        import traceback
-        traceback.print_exc()
 
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
-    try:
-        save_admin_chat_id(message.chat.id)
-    except:
-        pass
+    try: save_admin_chat_id(message.chat.id)
+    except: pass
     await message.answer(
         "👋 Привет! Я бот для двух каналов:\n"
         "🔐 <b>CyberGuardianSec</b>\n🤖 <b>AI Navigator</b>\n\n"
@@ -217,6 +197,65 @@ async def bottom_menu_handler(message: types.Message, state: FSMContext):
     await message.answer("🏠 Главное меню:", reply_markup=main_menu())
 
 
+# === МЕМ ДНЯ ===
+@dp.callback_query(F.data == "menu_meme")
+async def menu_meme(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(MemeFlow.entering_topic)
+    try:
+        await callback.message.edit_text(
+            "😄 <b>Мем дня</b>\n\n"
+            "✏️ Напиши тему (или отправь «random» — выберу сам).\n\n"
+            "<i>Пример: пароли, VPN, фишинг</i>"
+        )
+    except:
+        await callback.message.delete()
+        await callback.message.answer("✏️ Напиши тему мема:")
+    await callback.answer()
+
+
+@dp.message(MemeFlow.entering_topic)
+async def handle_meme_topic(message: types.Message, state: FSMContext):
+    topic = message.text.strip()
+    if topic.lower() in ["random", "рандом", "/random"]:
+        topic = "пароли"
+    await state.update_data(meme_topic=topic)
+    await state.set_state(MemeFlow.choosing_channel)
+    await message.answer("Выбери канал:", reply_markup=channels_inline("memech"))
+
+
+@dp.callback_query(F.data.startswith("memech_"), MemeFlow.choosing_channel)
+async def handle_meme_channel(callback: types.CallbackQuery, state: FSMContext):
+    channel_key = callback.data.replace("memech_", "")
+    if channel_key not in CHANNELS:
+        return
+    data = await state.get_data()
+    topic = data.get("meme_topic", "пароли")
+    emoji = "🔐" if channel_key == "cyber" else "🤖"
+    await callback.answer()
+    try:
+        await callback.message.edit_text(f"{emoji} Генерирую мем... ⏳")
+    except:
+        pass
+    try:
+        post_text = await generate_meme(topic, channel_key)
+        parsed = {"title": "Мем дня", "intro": post_text[:200], "details": "", "bullets": [], "bonus": "", "question": "", "hashtags": "#мем", "numbers": []}
+        rubric = {"key": "meme", "name": "😄 Мем дня", "format": "meme"}
+        image_path = await generate_image(parsed, channel_key, rubric)
+        if image_path and os.path.exists(image_path):
+            photo = FSInputFile(image_path)
+            await callback.message.answer_photo(photo, caption=post_text, reply_markup=approve_inline())
+            await state.update_data(post_text=post_text, image_url=image_path, channel_key=channel_key)
+            await state.set_state(PostFlow.approving)
+        else:
+            await callback.message.answer(post_text, reply_markup=approve_inline())
+            await state.update_data(post_text=post_text, image_url="", channel_key=channel_key)
+            await state.set_state(PostFlow.approving)
+    except Exception as e:
+        await callback.message.answer(f"❌ {e}")
+        await state.clear()
+
+
+# === ОБЛОЖКА ===
 @dp.callback_query(F.data == "menu_cover")
 async def menu_cover(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(CoverFlow.entering_title)
@@ -224,8 +263,7 @@ async def menu_cover(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             "🖼 <b>Обложка для статьи</b>\n\n"
             "✏️ Напиши заголовок статьи.\n"
-            "Найду фото на Pexels, добавлю заголовок и брендинг.\n\n"
-            "<i>Пример: Промпт-инжиниринг: как получать от ChatGPT то, что нужно</i>"
+            "Найду фото, добавлю заголовок и брендинг."
         )
     except:
         await callback.message.delete()
@@ -249,18 +287,13 @@ async def handle_cover_channel(callback: types.CallbackQuery, state: FSMContext)
     title = data.get("cover_title", "")
     emoji = "🔐" if channel_key == "cyber" else "🤖"
     await callback.answer()
-    try:
-        await callback.message.edit_text(f"{emoji} Генерирую обложку... ⏳")
-    except:
-        pass
+    try: await callback.message.edit_text(f"{emoji} Генерирую обложку... ⏳")
+    except: pass
     try:
         path = await generate_article_cover(title, channel_key)
         if path and os.path.exists(path):
             photo = FSInputFile(path)
-            await callback.message.answer_photo(
-                photo,
-                caption=f"🖼 <b>Обложка готова</b>\n\nКанал: {CHANNELS[channel_key]['name']}\nЗаголовок: {title}\n\nСкачай и вставь в статью в Telegra.ph."
-            )
+            await callback.message.answer_photo(photo, caption=f"🖼 <b>Обложка готова</b>\n\nКанал: {CHANNELS[channel_key]['name']}\nЗаголовок: {title}")
         else:
             await callback.message.answer("❌ Не удалось создать обложку.")
     except Exception as e:
@@ -268,14 +301,14 @@ async def handle_cover_channel(callback: types.CallbackQuery, state: FSMContext)
     await state.clear()
 
 
+# === ДАЙДЖЕСТ / АНАЛИТИКА / API ===
 @dp.message(Command("digest"))
 async def cmd_digest(message: types.Message):
     await message.answer("🔍 Ищу каналы...")
     try:
         r = await send_daily_digest(bot)
         await message.answer("✅ Отправлено" if r else "⚠️ Не удалось")
-    except Exception as e:
-        await message.answer(f"❌ {e}")
+    except Exception as e: await message.answer(f"❌ {e}")
 
 
 @dp.callback_query(F.data == "menu_digest")
@@ -285,8 +318,7 @@ async def menu_digest(callback: types.CallbackQuery):
     try:
         r = await send_daily_digest(bot)
         await callback.message.answer("✅ Отправлено" if r else "⚠️ Не удалось")
-    except Exception as e:
-        await callback.message.answer(f"❌ {e}")
+    except Exception as e: await callback.message.answer(f"❌ {e}")
 
 
 @dp.callback_query(F.data == "menu_analytics")
@@ -296,8 +328,7 @@ async def menu_analytics(callback: types.CallbackQuery):
     try:
         await send_stats_now(bot)
         await callback.message.answer("✅ Отправлено")
-    except Exception as e:
-        await callback.message.answer(f"❌ {e}")
+    except Exception as e: await callback.message.answer(f"❌ {e}")
 
 
 @dp.callback_query(F.data == "menu_api")
@@ -307,8 +338,7 @@ async def menu_api(callback: types.CallbackQuery):
     try:
         await get_api_status(bot)
         await callback.message.answer("✅ Отправлено")
-    except Exception as e:
-        await callback.message.answer(f"❌ {e}")
+    except Exception as e: await callback.message.answer(f"❌ {e}")
 
 
 @dp.callback_query(F.data == "menu_back")
@@ -328,18 +358,16 @@ async def menu_back(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "cancel_preview")
 async def cancel_preview(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
-    try:
-        await callback.message.delete()
-    except:
-        pass
+    try: await callback.message.delete()
+    except: pass
     await callback.message.answer("❌ Отменено.", reply_markup=main_menu())
     await callback.answer()
 
 
+# === ИДЕИ ===
 @dp.callback_query(F.data == "menu_ideas")
 async def menu_ideas(callback: types.CallbackQuery):
-    try:
-        await callback.message.edit_text("Выбери канал:", reply_markup=channels_inline("idea"))
+    try: await callback.message.edit_text("Выбери канал:", reply_markup=channels_inline("idea"))
     except:
         await callback.message.delete()
         await callback.message.answer("Выбери канал:", reply_markup=channels_inline("idea"))
@@ -349,45 +377,36 @@ async def menu_ideas(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("idea_"))
 async def show_ideas(callback: types.CallbackQuery, state: FSMContext):
     channel_key = callback.data.replace("idea_", "")
-    if channel_key not in CHANNELS:
-        return
+    if channel_key not in CHANNELS: return
     emoji = "🔐" if channel_key == "cyber" else "🤖"
-    try:
-        await callback.message.edit_text(f"{emoji} Генерирую...")
-    except:
-        pass
+    try: await callback.message.edit_text(f"{emoji} Генерирую...")
+    except: pass
     await callback.answer()
     try:
         ideas = await generate_ideas(channel_key, count=5)
         await state.update_data(ideas=ideas, idea_channel=channel_key)
-        try:
-            await callback.message.edit_text(f"{emoji} <b>Идеи:</b>", reply_markup=ideas_inline(channel_key, ideas))
+        try: await callback.message.edit_text(f"{emoji} <b>Идеи:</b>", reply_markup=ideas_inline(channel_key, ideas))
         except:
             await callback.message.delete()
             await callback.message.answer(f"{emoji} <b>Идеи:</b>", reply_markup=ideas_inline(channel_key, ideas))
-    except Exception as e:
-        await callback.message.answer(f"❌ {e}", reply_markup=main_menu())
+    except Exception as e: await callback.message.answer(f"❌ {e}", reply_markup=main_menu())
 
 
 @dp.callback_query(F.data.startswith("moreideas_"))
 async def more_ideas(callback: types.CallbackQuery, state: FSMContext):
     channel_key = callback.data.replace("moreideas_", "")
     emoji = "🔐" if channel_key == "cyber" else "🤖"
-    try:
-        await callback.message.edit_text(f"{emoji} Генерирую...")
-    except:
-        pass
+    try: await callback.message.edit_text(f"{emoji} Генерирую...")
+    except: pass
     await callback.answer()
     try:
         ideas = await generate_ideas(channel_key, count=5)
         await state.update_data(ideas=ideas, idea_channel=channel_key)
-        try:
-            await callback.message.edit_text(f"{emoji} <b>Ещё:</b>", reply_markup=ideas_inline(channel_key, ideas))
+        try: await callback.message.edit_text(f"{emoji} <b>Ещё:</b>", reply_markup=ideas_inline(channel_key, ideas))
         except:
             await callback.message.delete()
             await callback.message.answer(f"{emoji} <b>Ещё:</b>", reply_markup=ideas_inline(channel_key, ideas))
-    except Exception as e:
-        await callback.message.answer(f"❌ {e}", reply_markup=main_menu())
+    except Exception as e: await callback.message.answer(f"❌ {e}", reply_markup=main_menu())
 
 
 @dp.callback_query(F.data.startswith("useidea_"))
@@ -396,37 +415,32 @@ async def use_idea(callback: types.CallbackQuery, state: FSMContext):
     channel_key, idx = parts[1], int(parts[2])
     data = await state.get_data()
     ideas = data.get("ideas", [])
-    if idx >= len(ideas):
-        return
+    if idx >= len(ideas): return
     topic = ideas[idx]
     emoji = "🔐" if channel_key == "cyber" else "🤖"
     await state.update_data(channel_key=channel_key)
     await callback.answer()
-    try:
-        await callback.message.edit_text(f"{emoji} Генерирую: <i>{topic}</i>...")
-    except:
-        pass
+    try: await callback.message.edit_text(f"{emoji} Генерирую: <i>{topic}</i>...")
+    except: pass
     chat_id = callback.message.chat.id
     try:
         post_text, parsed = await generate_post(topic, channel_key)
         image_path = await generate_image(parsed, channel_key)
         await state.update_data(topic=topic, post_text=post_text, image_url=image_path, channel_key=channel_key)
         await state.set_state(PostFlow.approving)
-        try:
-            await callback.message.delete()
-        except:
-            pass
+        try: await callback.message.delete()
+        except: pass
         await _send_preview(chat_id, post_text, image_path, channel_key)
     except Exception as e:
         await bot.send_message(chat_id, f"❌ {e}", reply_markup=main_menu())
         await state.clear()
 
 
+# === СОЗДАТЬ ПОСТ ===
 @dp.callback_query(F.data == "menu_create")
 async def menu_create(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(PostFlow.entering_topic)
-    try:
-        await callback.message.edit_text("Выбери канал:", reply_markup=channels_inline("ch"))
+    try: await callback.message.edit_text("Выбери канал:", reply_markup=channels_inline("ch"))
     except:
         await callback.message.delete()
         await callback.message.answer("Выбери канал:", reply_markup=channels_inline("ch"))
@@ -436,15 +450,13 @@ async def menu_create(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data.startswith("ch_"))
 async def choose_channel(callback: types.CallbackQuery, state: FSMContext):
     channel_key = callback.data.replace("ch_", "")
-    if channel_key not in CHANNELS:
-        return
+    if channel_key not in CHANNELS: return
     profile = CHANNELS[channel_key]
     emoji = "🔐" if channel_key == "cyber" else "🤖"
     await state.update_data(channel_key=channel_key)
     await state.set_state(PostFlow.entering_topic)
     text = f"{emoji} Канал: <b>{profile['name']}</b>\n\n✏️ Напиши тему поста."
-    try:
-        await callback.message.edit_text(text)
+    try: await callback.message.edit_text(text)
     except:
         await callback.message.delete()
         await callback.message.answer(text)
@@ -470,6 +482,7 @@ async def handle_topic(message: types.Message, state: FSMContext):
         await state.clear()
 
 
+# === ПУБЛИКАЦИЯ ===
 @dp.callback_query(F.data == "approve_publish", PostFlow.approving)
 async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -485,17 +498,11 @@ async def approve_publish(callback: types.CallbackQuery, state: FSMContext):
         else:
             tg_message = await bot.send_message(profile["telegram_channel"], post_text)
         increment_post_count()
-        try:
-            await callback.message.delete()
-        except:
-            pass
-
-        # VK-пост + карточка в личку
+        try: await callback.message.delete()
+        except: pass
         await _publish_vk_now(channel_key, post_text, image_path, tg_message.message_id)
-
         await callback.message.answer(
-            f"✅ Опубликовано в TG + VK ({profile['name']})\n"
-            f"🖼 Карточка для VK — в личке (вставь вручную)",
+            f"✅ Опубликовано в TG + VK ({profile['name']})\n🖼 Карточка для VK — в личке",
             reply_markup=main_menu()
         )
     except Exception as e:
@@ -518,10 +525,8 @@ async def approve_publish_tg(callback: types.CallbackQuery, state: FSMContext):
         else:
             await bot.send_message(profile["telegram_channel"], post_text)
         increment_post_count()
-        try:
-            await callback.message.delete()
-        except:
-            pass
+        try: await callback.message.delete()
+        except: pass
         await callback.message.answer(f"📱 TG ({profile['name']})", reply_markup=main_menu())
     except Exception as e:
         await callback.message.answer(f"❌ {e}", reply_markup=main_menu())
@@ -536,22 +541,17 @@ async def approve_regen(callback: types.CallbackQuery, state: FSMContext):
     channel_key = data.get("channel_key", "cyber")
     emoji = "🔐" if channel_key == "cyber" else "🤖"
     chat_id = callback.message.chat.id
-    try:
-        await callback.message.edit_caption(caption=f"{emoji} Генерирую заново...")
+    try: await callback.message.edit_caption(caption=f"{emoji} Генерирую заново...")
     except:
-        try:
-            await callback.message.edit_text(f"{emoji} Генерирую заново...")
-        except:
-            pass
+        try: await callback.message.edit_text(f"{emoji} Генерирую заново...")
+        except: pass
     await callback.answer()
     try:
         post_text, parsed = await generate_post(topic, channel_key)
         image_path = await generate_image(parsed, channel_key)
         await state.update_data(post_text=post_text, image_url=image_path)
-        try:
-            await callback.message.delete()
-        except:
-            pass
+        try: await callback.message.delete()
+        except: pass
         await _send_preview(chat_id, post_text, image_path, channel_key)
     except Exception as e:
         await bot.send_message(chat_id, f"❌ {e}", reply_markup=main_menu())
@@ -561,8 +561,7 @@ async def approve_regen(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "menu_manual")
 async def menu_manual(callback: types.CallbackQuery):
     text = "Отправь: <code>текст | канал</code>\n\nПример: <code>Как защитить пароль | cyber</code>"
-    try:
-        await callback.message.edit_text(text, reply_markup=main_menu())
+    try: await callback.message.edit_text(text, reply_markup=main_menu())
     except:
         await callback.message.delete()
         await callback.message.answer(text, reply_markup=main_menu())
@@ -572,23 +571,19 @@ async def menu_manual(callback: types.CallbackQuery):
 @dp.message(F.text.contains("|"))
 async def handle_manual_post(message: types.Message):
     parts = [p.strip() for p in message.text.split("|", 1)]
-    if len(parts) != 2:
-        return
+    if len(parts) != 2: return
     text, channel_key = parts
     channel_key = channel_key.lower()
-    if channel_key not in CHANNELS:
-        return
+    if channel_key not in CHANNELS: return
     try:
         await bot.send_message(CHANNELS[channel_key]["telegram_channel"], text)
         increment_post_count()
         await message.answer("✅ Опубликовано", reply_markup=main_menu())
-    except Exception as e:
-        await message.answer(f"❌ {e}")
+    except Exception as e: await message.answer(f"❌ {e}")
 
 
 @app.route("/")
-def health():
-    return "OK", 200
+def health(): return "OK", 200
 
 
 @app.route("/webhook", methods=["POST"])
