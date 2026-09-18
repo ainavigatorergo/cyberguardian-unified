@@ -43,8 +43,7 @@ def _format_vk_post(vk_text, channel_key, tg_message_id):
     for t in tags_all:
         tl = t.lower()
         if tl not in seen:
-            seen.add(tl)
-            unique.append(t)
+            seen.add(tl); unique.append(t)
 
     body = "\n".join(body_lines).strip()
     tg_link_base = TG_LINKS.get(channel_key, "")
@@ -55,11 +54,9 @@ def _format_vk_post(vk_text, channel_key, tg_message_id):
 
 
 async def _send_card_to_admin(bot, image_path, channel_key):
-    if not image_path or not os.path.exists(image_path):
-        return
+    if not image_path or not os.path.exists(image_path): return
     admin_id = get_admin_chat_id()
-    if not admin_id:
-        return
+    if not admin_id: return
     try:
         photo = FSInputFile(image_path)
         channel_name = "CyberGuardianSec" if channel_key == "cyber" else "AI Navigator"
@@ -67,37 +64,48 @@ async def _send_card_to_admin(bot, image_path, channel_key):
             admin_id, photo,
             caption=f"🖼 <b>Карточка для VK</b> ({channel_name})\n\nСкачай и вставь в VK-пост вручную."
         )
-        print(f"✅ [Admin] Карточка отправлена ({channel_key})")
+        print(f"✅ [Admin] Карточка отправлена ({channel_key})", flush=True)
     except Exception as e:
-        print(f"⚠️ [Admin] {e}")
+        print(f"⚠️ [Admin] {e}", flush=True)
+
+
+async def _send_parse_error(bot, channel_key, topic):
+    admin_id = get_admin_chat_id()
+    if not admin_id: return
+    try:
+        await bot.send_message(
+            admin_id,
+            f"⚠️ <b>Парсер не справился</b>\n\n"
+            f"Канал: {channel_key}\nТема: {topic}\n\n"
+            f"Пост НЕ опубликован. Попробуй сгенерировать вручную через меню 📝 Создать пост."
+        )
+    except Exception as e:
+        print(f"⚠️ [Admin] {e}", flush=True)
 
 
 async def _publish_vk(bot, channel_key, post_text, image_path, tg_message_id):
-    print(f"\n⏳ [VK] Публикация ({channel_key})...")
+    print(f"\n⏳ [VK] Публикация ({channel_key})...", flush=True)
     try:
         vk_text = await generate_vk_version(post_text, channel_key)
         vk_text = _format_vk_post(vk_text, channel_key, tg_message_id)
-
         result = await publish_to_vk(channel_key, vk_text, None)
         if result:
-            print(f"✅ [VK] Опубликовано ({channel_key})")
+            print(f"✅ [VK] Опубликовано ({channel_key})", flush=True)
         else:
-            print(f"⚠️ [VK] publish_to_vk вернул False")
-
+            print(f"⚠️ [VK] publish_to_vk вернул False", flush=True)
         if image_path and os.path.exists(image_path):
             await _send_card_to_admin(bot, image_path, channel_key)
     except Exception as e:
-        print(f"❌ [VK] Ошибка: {e}")
+        print(f"❌ [VK] Ошибка: {e}", flush=True)
 
 
 async def publish_rubric_post(bot, channel_key: str, is_series=False):
-    """Обычный пост по рубрике дня. Если is_series=True — добавляет связку с прошлым постом."""
     profile = CHANNELS[channel_key]
     emoji = "🔐" if channel_key == "cyber" else "🤖"
     weekday = datetime.now().weekday()
     rubrics = RUBRICS_CYBER if channel_key == "cyber" else RUBRICS_AI
     rubric = rubrics.get(weekday, rubrics[6])
-    print(f"\n{emoji} === {channel_key} | {rubric['name']} === {'(серия)' if is_series else ''}")
+    print(f"\n{emoji} === {channel_key} | {rubric['name']} === {'(серия)' if is_series else ''}", flush=True)
 
     used_data = load_used_topics()
     used_list = used_data.get(channel_key, [])
@@ -117,7 +125,7 @@ async def publish_rubric_post(bot, channel_key: str, is_series=False):
             topic = cand
             break
     if not topic: topic = available[0]
-    print(f"📝 Тема: {topic}")
+    print(f"📝 Тема: {topic}", flush=True)
 
     try:
         fmt = rubric.get("format", "post")
@@ -142,10 +150,15 @@ async def publish_rubric_post(bot, channel_key: str, is_series=False):
 
         else:
             post_text, parsed = await generate_post(topic, channel_key, rubric, is_series=is_series)
-            print(f"✅ Текст: {len(post_text)} символов")
+            # Проверка на провал парсера
+            if post_text is None or parsed is None or parsed.get("_parse_failed"):
+                print(f"❌ Парсер не справился — пост НЕ публикую", flush=True)
+                await _send_parse_error(bot, channel_key, topic)
+                return
 
+            print(f"✅ Текст: {len(post_text)} символов", flush=True)
             image_path = await generate_image(parsed, channel_key, rubric)
-            print(f"🎨 Карточка: {image_path}")
+            print(f"🎨 Карточка: {image_path}", flush=True)
 
             tg_message = None
             if len(post_text) <= 1024 and image_path and os.path.exists(image_path):
@@ -161,16 +174,15 @@ async def publish_rubric_post(bot, channel_key: str, is_series=False):
         save_used_topics(used_data)
 
     except Exception as e:
-        print(f"❌ Ошибка: {e}")
+        print(f"❌ Ошибка: {e}", flush=True)
         import traceback
         traceback.print_exc()
 
 
 async def publish_meme(bot, channel_key: str):
-    """Мем дня — только среда 14:00."""
     profile = CHANNELS[channel_key]
     emoji = "🔐" if channel_key == "cyber" else "🤖"
-    print(f"\n{emoji} === {channel_key} | 😄 МЕМ ДНЯ ===")
+    print(f"\n{emoji} === {channel_key} | 😄 МЕМ ДНЯ ===", flush=True)
 
     used_data = load_used_topics()
     used_list = used_data.get(channel_key, [])
@@ -179,66 +191,50 @@ async def publish_meme(bot, channel_key: str):
         available = profile["topics"]
 
     topic = available[0] if available else "пароли"
-    print(f"📝 Тема мема: {topic}")
+    print(f"📝 Тема мема: {topic}", flush=True)
 
     try:
         post_text = await generate_meme(topic, channel_key)
-        print(f"✅ Мем: {len(post_text)} символов")
+        print(f"✅ Мем: {len(post_text)} символов", flush=True)
 
         parsed = {
-            "title": "😄 Мем дня",
-            "intro": post_text,
-            "details": "",
-            "bullets": [],
-            "bonus": "",
-            "question": "",
-            "hashtags": "#мем",
-            "numbers": [],
+            "title": "😄 Мем дня", "intro": post_text, "details": "",
+            "bullets": [], "bonus": "", "question": "", "hashtags": "#мем",
+            "numbers": [], "_parse_failed": False,
         }
         rubric_meme = {"key": "meme", "name": "😄 Мем дня", "format": "meme"}
 
         image_path = await generate_image(parsed, channel_key, rubric_meme)
-        print(f"🎨 Карточка мема: {image_path}")
+        print(f"🎨 Карточка мема: {image_path}", flush=True)
 
         tg_message = None
         if image_path and os.path.exists(image_path):
-            tg_message = await bot.send_photo(
-                profile["telegram_channel"],
-                FSInputFile(image_path),
-                caption=post_text
-            )
+            tg_message = await bot.send_photo(profile["telegram_channel"], FSInputFile(image_path), caption=post_text)
         else:
             tg_message = await bot.send_message(profile["telegram_channel"], post_text)
         increment_post_count()
 
         await _publish_vk(bot, channel_key, post_text, image_path, tg_message.message_id)
 
-        # Мем-тема не идёт в used_topics (иначе обычный пост её пропустит)
     except Exception as e:
-        print(f"❌ Ошибка мема: {e}")
+        print(f"❌ Ошибка мема: {e}", flush=True)
         import traceback
         traceback.print_exc()
 
 
 def start_scheduler(bot):
-    # === ОБЫЧНЫЕ ПОСТЫ (без вторника) ===
-    # Вторник — только серийные посты (ниже)
-    # Остальные дни — обычные
     days_no_tue = "mon,wed,thu,fri,sat,sun"
 
-    # Cyber
     scheduler.add_job(publish_rubric_post, "cron", day_of_week=days_no_tue, hour=9, minute=30,
                       args=[bot, "cyber", False], id="cyber_morning")
     scheduler.add_job(publish_rubric_post, "cron", day_of_week=days_no_tue, hour=19, minute=0,
                       args=[bot, "cyber", False], id="cyber_evening")
 
-    # AI
     scheduler.add_job(publish_rubric_post, "cron", day_of_week=days_no_tue, hour=11, minute=0,
                       args=[bot, "ai", False], id="ai_morning")
     scheduler.add_job(publish_rubric_post, "cron", day_of_week=days_no_tue, hour=20, minute=0,
                       args=[bot, "ai", False], id="ai_evening")
 
-    # === ВТОРНИК — СЕРИЙНЫЕ ПОСТЫ ===
     scheduler.add_job(publish_rubric_post, "cron", day_of_week="tue", hour=9, minute=30,
                       args=[bot, "cyber", False], id="cyber_tue_morning")
     scheduler.add_job(publish_rubric_post, "cron", day_of_week="tue", hour=19, minute=0,
@@ -249,7 +245,6 @@ def start_scheduler(bot):
     scheduler.add_job(publish_rubric_post, "cron", day_of_week="tue", hour=20, minute=0,
                       args=[bot, "ai", True], id="ai_tue_series")
 
-    # === МЕМ ДНЯ: среда 14:00 ===
     scheduler.add_job(publish_meme, "cron", day_of_week="wed", hour=14, minute=0,
                       args=[bot, "cyber"], id="cyber_meme")
     scheduler.add_job(publish_meme, "cron", day_of_week="wed", hour=14, minute=0,
@@ -259,9 +254,9 @@ def start_scheduler(bot):
     scheduler.add_job(send_weekly_report, "cron", day_of_week="sun", hour=20, minute=0, args=[bot], id="weekly_report")
     scheduler.add_job(check_all_apis, "interval", hours=1, args=[bot], id="api_monitor")
     scheduler.start()
-    print("✅ Планировщик запущен:")
-    print("   Cyber: 09:30, 19:00 (пн, ср, чт, пт, сб, вс)")
-    print("   Cyber: 09:30 + 19:00 (вт — серия)")
-    print("   AI: 11:00, 20:00 (пн, ср, чт, пт, сб, вс)")
-    print("   AI: 11:00 + 20:00 (вт — серия)")
-    print("   Мем: среда 14:00 (оба канала)")
+    print("✅ Планировщик:", flush=True)
+    print("   Cyber: 09:30, 19:00 (пн, ср, чт, пт, сб, вс)", flush=True)
+    print("   Cyber: 09:30 + 19:00 (вт — серия)", flush=True)
+    print("   AI: 11:00, 20:00 (пн, ср, чт, пт, сб, вс)", flush=True)
+    print("   AI: 11:00 + 20:00 (вт — серия)", flush=True)
+    print("   Мем: среда 14:00 (оба канала)", flush=True)
